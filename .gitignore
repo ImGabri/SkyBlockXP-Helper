@@ -1,0 +1,23 @@
+# Virtuelle Python-Umgebung
+.venv/
+venv/
+
+# Geheimnisse
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Lokale Programmdaten
+cache/
+logs/
+
+# VS Code
+.vscode/settings.json
+
+# Betriebssystem
+.DS_Store
+Thumbs.db
