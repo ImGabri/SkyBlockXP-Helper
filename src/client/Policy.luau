@@ -48,9 +48,9 @@ function Policy.option(key: string, value: any): (any, string?)
         if value == "Single" or value == "Triple" or value == "Octuple" then return value, nil end
         return nil, "Choose Single, Triple or Octuple."
     end
-    if key == "MachineTravelMode" then
+    if key == "MachineTravelMode" or key == "EggTravelMode" then
         if value == "Walk" or value == "Off" then return value, nil end
-        return nil, "Choose Walk or Off for machine travel."
+        return nil, "Choose Walk or Off for travel."
     end
     if key == "Area" or key == "NameFilter" or key == "EggName" or key == "ConversionSpecies" then
         if type(value) ~= "string" then

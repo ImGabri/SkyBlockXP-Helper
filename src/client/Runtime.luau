@@ -141,20 +141,43 @@ function Runtime:PrepareCare()
     return true
 end
 
+function Runtime:LivingCharacter()
+    local character = self.Player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not character or not character.Parent or not humanoid or humanoid.Parent ~= character
+        or type(humanoid.Health) ~= "number" or not (humanoid.Health > 0)
+        or not root or root.Parent ~= character then return nil end
+    return character, humanoid, root
+end
+
 function Runtime:StartCare(key, manual)
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
-    local character = self.Player.Character
-    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before using pet tools." end
     local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
-    local travel = self.Options.MachineTravelMode == "Walk" and key ~= "AutoHatch"
+    local travel = if key == "AutoHatch" then self.Options.EggTravelMode == "Walk" else self.Options.MachineTravelMode == "Walk"
     local timeout = Config.RequestTimeout + (if travel then Config.TravelTimeout else 0)
     local started = self.Jobs:start("care", timeout, function(activeJob)
+        self.CareMutation = activeJob
         local function current()
-            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
-                and (manual or self.Options[key])
+            if not self.Alive or not activeJob() or not (manual or self.Options[key]) then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
         end
-        if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
+        if key == "AutoHatch" then
+            if not self.Care:CanHatch(egg, mode, current) or not current() then return 0 end
+            if travel then
+                local target = self.Care:GetEggTarget(egg, current)
+                if not target or not current() then return 0 end
+                self.MachineJourney = activeJob
+                self.Jobs:cancel("AutoFarm")
+                self:StopNavigation()
+                if not self.Navigator:ApproachEgg(target, current) or not current() then return 0 end
+            end
+            return self.Care:Hatch(egg, mode, current)
+        end
         local variant = if key == "AutoGold" then "Gold" else "Rainbow"
         if not self.Care:CanConvert(variant, species, current) or not current() then return 0 end
         if travel then
@@ -180,14 +203,16 @@ end
 
 function Runtime:GoToMachine(variant, openMenu)
     if not self.Alive then return false, "Suite unloaded." end
-    local character = self.Player.Character
-    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before traveling." end
     self.Jobs:cancel("AutoFarm")
     self:StopNavigation()
     local started = self.Jobs:start("care", Config.TravelTimeout, function(activeJob)
         self.MachineJourney = activeJob
         local function current()
-            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+            if not self.Alive or not activeJob() then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
         end
         if not self.Navigator:Approach(variant, current) or not current() then return false end
         if openMenu then self.Care:OpenMenu(variant) end
@@ -206,8 +231,48 @@ function Runtime:GoToMachine(variant, openMenu)
     return true
 end
 
+function Runtime:GoToEgg()
+    if not self.Alive then return false, "Suite unloaded." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before traveling." end
+    local egg = self.Options.EggName
+    local started = self.Jobs:start("care", Config.RequestTimeout + Config.TravelTimeout, function(activeJob)
+        self.MachineJourney = activeJob
+        local function current()
+            if not self.Alive or not activeJob() then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
+        end
+        local target = self.Care:GetEggTarget(egg, current)
+        if not target or not current() then return false end
+        self.Jobs:cancel("AutoFarm")
+        self:StopNavigation()
+        return self.Navigator:ApproachEgg(target, current)
+    end, function(ok, result)
+        if not ok then
+            self.Navigator:Stop()
+            self.State.LastError = "Egg travel: " .. tostring(result)
+            self.State.CareStatus = "Egg travel stopped — see error"
+        elseif result then self.State.CareStatus = "Arrived at selected egg" end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping journey started." end
+    return true
+end
+
 function Runtime:StepCare()
     if not self.Alive then return end
+    if not self:LivingCharacter() then
+        if (self.CareMutation and self.CareMutation()) or (self.MachineJourney and self.MachineJourney()) then
+            self.Jobs:cancel("care")
+            self.Navigator:Stop()
+        end
+        if self.Options.AutoHatch or self.Options.AutoGold or self.Options.AutoRainbow then
+            self.State.CareStatus = "Waiting for a living character — automatic pet actions paused"
+            self:Publish()
+        end
+        return
+    end
     local now = os.clock()
     local features = { "AutoRainbow", "AutoGold", "AutoHatch" }
     local cursor = self.CareCursor or 1
@@ -420,7 +485,7 @@ function Runtime:SetOption(key, value)
             self.NextAt[key] = 0
         end
     end
-    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" then
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" or key == "EggTravelMode" then
         self.Jobs:cancel("care")
         self.Navigator:Stop()
     end
@@ -527,6 +592,8 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Navigation stage: " .. tostring(self.Navigator.Stage or "not started"),
+        "Pet operation status: " .. tostring(self.State.CareStatus),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
@@ -549,6 +616,7 @@ function Runtime:Action(action)
         self.State.CareStatus = "Selected " .. caption
         self:Publish()
     elseif action == "HatchOnce" then return self:StartCare("AutoHatch", true)
+    elseif action == "GoSelectedEgg" then return self:GoToEgg()
     elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
     elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
     elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")
