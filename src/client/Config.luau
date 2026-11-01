@@ -2,7 +2,7 @@
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.5.0",
+    Version = "0.6.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -18,6 +18,14 @@ return table.freeze({
         NameFilter = "",
         Radius = 200,
         FarmInterval = 0.75,
+        AutoHatch = false,
+        AutoGold = false,
+        AutoRainbow = false,
+        EggName = "",
+        HatchMode = "Single",
+        HatchInterval = 3,
+        ConversionSpecies = "",
+        ConversionInterval = 3,
         MovementEnabled = false,
         WalkSpeed = 24,
         JumpPower = 50,

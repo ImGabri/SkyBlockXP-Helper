@@ -4,6 +4,7 @@ local Policy = require(script.Parent.Policy)
 local Jobs = require(script.Parent.Jobs)
 local Interface = require(script.Parent.Interface)
 local PetSim99 = require(script.Parent.PetSim99)
+local PetCare = require(script.Parent.PetCare)
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -13,10 +14,11 @@ Runtime.__index = Runtime
 function Runtime.new(player, parent)
     local self = setmetatable({
         Player = player, Alive = true, Connections = {}, Jobs = Jobs.new(),
-        Options = table.clone(Config.Options), Adapter = PetSim99.new(),
+        Options = table.clone(Config.Options), Adapter = PetSim99.new(), Care = PetCare.new(),
         Ready = false, Failures = {}, NextAt = {},
         State = { Status = "Idle — run the compatibility check manually", Target = "None", EquippedPets = 0,
-            Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "" },
+            Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "",
+            CareStatus = "Pet tools idle — click Load pet tools", HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
     }, Runtime)
     self.Ui = Interface.mount({
         parent = parent, name = Config.Name, version = Config.Version, options = self.Options,
@@ -25,6 +27,7 @@ function Runtime.new(player, parent)
     })
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
+        self.Jobs:cancel("care")
         self:StopNavigation()
         self.LastAssignment = nil
         self.NextAt = {}
@@ -113,7 +116,66 @@ function Runtime:FeatureResult(key, ok, result)
     self:Publish()
 end
 
+function Runtime:PrepareCare()
+    for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
+    self.Jobs:cancel("care")
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:Connect(activeJob)
+    end, function(ok, result)
+        self.State.CareStatus = if ok then self.Care.Reason else "Pet tools failed to load"
+        self.State.LastError = if ok then "" else tostring(result)
+        self:Publish()
+    end)
+    if not started then return false, "A previous pet operation is still returning; no new request sent." end
+    self:Publish()
+    return true
+end
+
+function Runtime:StartCare(key, manual)
+    if not self.Alive then return false, "Suite unloaded." end
+    if not self.Care.Supported[key] then return false, self.Care.Reason end
+    local character = self.Player.Character
+    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        local function current()
+            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+                and (manual or self.Options[key])
+        end
+        if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
+        return self.Care:Convert(if key == "AutoGold" then "Gold" else "Rainbow", species, current)
+    end, function(ok, result)
+        self.State.CareStatus = self.Care.Reason
+        if not ok then
+            self.Options[key] = false
+            self.State.LastError = key .. ": " .. tostring(result)
+            self.State.CareStatus = "Pet operation stopped — see error"
+        end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping request sent." end
+    return true
+end
+
+function Runtime:StepCare()
+    if not self.Alive then return end
+    local now = os.clock()
+    for _, key in ipairs({ "AutoRainbow", "AutoGold", "AutoHatch" }) do
+        if self.Options[key] and not self.Jobs:busy("care") and now >= (self.NextAt[key] or 0) then
+            local interval = if key == "AutoHatch" then self.Options.HatchInterval else self.Options.ConversionInterval
+            self.NextAt[key] = now + interval
+            local started, reason = self:StartCare(key, false)
+            if not started then
+                self.Options[key] = false
+                self.State.LastError = reason
+                self:Publish()
+            end
+        end
+    end
+end
+
 function Runtime:Step()
+    self:StepCare()
     if not self.Ready then return end
     local now = os.clock()
     local character = self.Player.Character
@@ -203,10 +265,12 @@ function Runtime:Publish()
     if not self.Alive then return end
     self.State.Options = table.clone(self.Options)
     self.State.Supported = table.clone(self.Adapter.Supported)
+    for key, supported in pairs(self.Care.Supported) do self.State.Supported[key] = supported end
+    for field, count in pairs(self.Care.Counts) do self.State[field] = count end
     self.State.Supported.AntiIdle = not self.AntiIdleUnavailable
     self.State.Capabilities = self.Adapter.Reason
         .. "\nNative Roblox UI; no external UI loader or hooks required."
-        .. "\nIdle input and clipboard are tested only when used."
+        .. "\nIdle input and clipboard are tested only when used.\n" .. self.Care.Reason
     self.Ui:Update(self.State)
 end
 
@@ -265,6 +329,7 @@ function Runtime:SetOption(key, value)
     if parsed == true and self.Adapter.Supported[key] == false then
         return false, self.Adapter.Reason
     end
+    if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
@@ -273,11 +338,15 @@ function Runtime:SetOption(key, value)
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
+            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then self.Jobs:cancel("care") end
             if key == "AutoFarm" or key == "WalkToTarget" then self:StopNavigation() end
         else
             self.Failures[key] = 0
             self.NextAt[key] = 0
         end
+    end
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" then
+        self.Jobs:cancel("care")
     end
     if key == "AutoFarm" or key == "FarmMode" or key == "Area" or key == "NameFilter" or key == "Radius" then
         self.Jobs:cancel("AutoFarm")
@@ -323,6 +392,7 @@ function Runtime:StopAll()
     self:RestoreMovement()
     self:SetLighting(false)
     self.State.Status = "Stopped — all automation disabled"
+    self.State.CareStatus = "Pet automation stopped"
     self:Publish()
 end
 
@@ -353,6 +423,7 @@ function Runtime:Diagnostics()
         Config.Name .. " v" .. Config.Version,
         "Startup makes no game-module or network probe. The compatibility check is manual.",
         self.Adapter.Report,
+        self.Care.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
         "Last error: " .. tostring(self.State.LastError),
         "Counters represent requests, not confirmed rewards. No credentials or inventory transfer is performed.",
@@ -362,6 +433,15 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "HatchOnce" then return self:StartCare("AutoHatch", true)
+    elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
+    elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
+    elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")
+    elseif action == "OpenGoldMenu" then return self.Care:OpenMenu("Gold")
+    elseif action == "OpenRainbowMenu" then return self.Care:OpenMenu("Rainbow")
+    elseif action == "OpenInventory" then return self.Care:OpenMenu("Inventory")
+    elseif action == "ClearError" then self.State.LastError = ""; self:Publish()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)
     elseif action == "Unload" then self:Destroy()
     elseif action == "Rejoin" then
@@ -392,6 +472,7 @@ function Runtime:Destroy()
     if self.Pulse then pcall(task.cancel, self.Pulse) end
     for _, connection in ipairs(self.Connections) do connection:Disconnect() end
     self.Adapter:Destroy()
+    self.Care:Destroy()
     self.Ui:Destroy()
     if self.OnDestroy then self.OnDestroy() end
 end

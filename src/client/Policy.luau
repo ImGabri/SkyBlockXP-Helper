@@ -7,6 +7,8 @@ local numeric = {
     FarmInterval = { 0.25, 10 },
     WalkSpeed = { 8, 100 },
     JumpPower = { 0, 150 },
+    HatchInterval = { 1, 30 },
+    ConversionInterval = { 2, 30 },
 }
 local booleans = {
     AutoFarm = true,
@@ -16,6 +18,9 @@ local booleans = {
     MovementEnabled = true,
     Fullbright = true,
     AntiIdle = true,
+    AutoHatch = true,
+    AutoGold = true,
+    AutoRainbow = true,
 }
 
 function Policy.option(key: string, value: any): (any, string?)
@@ -39,7 +44,11 @@ function Policy.option(key: string, value: any): (any, string?)
         end
         return nil, "Unknown farm mode."
     end
-    if key == "Area" or key == "NameFilter" then
+    if key == "HatchMode" then
+        if value == "Single" or value == "Triple" or value == "Octuple" then return value, nil end
+        return nil, "Choose Single, Triple or Octuple."
+    end
+    if key == "Area" or key == "NameFilter" or key == "EggName" or key == "ConversionSpecies" then
         if type(value) ~= "string" then
             return nil, "Expected text."
         end
