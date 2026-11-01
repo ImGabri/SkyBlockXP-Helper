@@ -15,7 +15,7 @@ function Runtime.new(player, parent)
         Player = player, Alive = true, Connections = {}, Jobs = Jobs.new(),
         Options = table.clone(Config.Options), Adapter = PetSim99.new(),
         Ready = false, Failures = {}, NextAt = {},
-        State = { Status = "Inspecting game...", Target = "None", EquippedPets = 0,
+        State = { Status = "Idle — run the compatibility check manually", Target = "None", EquippedPets = 0,
             Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "" },
     }, Runtime)
     self.Ui = Interface.mount({
@@ -56,11 +56,13 @@ function Runtime.new(player, parent)
             self:Publish()
         end
     end))
-    self:Reconnect()
+    self:Publish()
     self.Pulse = task.spawn(function()
         while self.Alive do
-            self.Jobs:tick()
-            local ok, message = pcall(function() self:Step() end)
+            local ok, message = pcall(function()
+                self.Jobs:tick()
+                self:Step()
+            end)
             if not ok then
                 self:StopAll()
                 self.State.LastError = "Scheduler stopped: " .. tostring(message)
@@ -127,9 +129,9 @@ function Runtime:Step()
     end
     if self.Options.AutoFarm and not self.Jobs:busy("AutoFarm") and now >= (self.NextAt.AutoFarm or 0) then
         self.NextAt.AutoFarm = now + self.Options.FarmInterval
-        self.Jobs:start("AutoFarm", Config.FarmTimeout, function()
-            local snapshot = self.Adapter:Snapshot()
-            if self.Player.Character ~= character or not character.Parent or not root.Parent or humanoid.Health <= 0 then
+        self.Jobs:start("AutoFarm", Config.FarmTimeout, function(activeJob)
+            local snapshot = self.Adapter:Snapshot(activeJob)
+            if not activeJob() or self.Player.Character ~= character or not character.Parent or not root.Parent or humanoid.Health <= 0 then
                 return { Status = "Waiting for the current character..." }
             end
             if self.Options.FarmMode ~= "Nearest" and not snapshot.HealthKnown then
@@ -161,7 +163,7 @@ function Runtime:Step()
                 return { Status = "Recent farm requests; watching target.", Target = title }
             end
             local count = self.Adapter:Assign(target, snapshot.Pets, function()
-                return self.Alive and self.Options.AutoFarm and self.Player.Character == character
+                return activeJob() and self.Alive and self.Options.AutoFarm and self.Player.Character == character
                     and character.Parent ~= nil and root.Parent ~= nil and humanoid.Parent ~= nil and humanoid.Health > 0
             end)
             if count > 0 then
@@ -176,9 +178,9 @@ function Runtime:Step()
         local key, kind, field = pair[1], pair[2], pair[3]
         if self.Options[key] and not self.Jobs:busy(key) and now >= (self.NextAt[key] or 0) then
             self.NextAt[key] = now + 1
-            self.Jobs:start(key, Config.RequestTimeout, function()
+            self.Jobs:start(key, Config.RequestTimeout, function(activeJob)
                 local count = self.Adapter:Collect(kind, self.Options.Radius, function()
-                    return self.Alive and self.Options[key] and self.Player.Character == character
+                    return activeJob() and self.Alive and self.Options[key] and self.Player.Character == character
                         and character.Parent ~= nil and root.Parent ~= nil and humanoid.Parent ~= nil and humanoid.Health > 0
                 end)
                 return { [field] = self.State[field] + count }
@@ -186,6 +188,12 @@ function Runtime:Step()
         end
     end
     if now >= (self.NextPublish or 0) then
+        for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do
+            if self.Options[key] and self.Jobs:blocked(key) then
+                self.State.Status = "Waiting for a canceled request to finish; no retry sent."
+                break
+            end
+        end
         self.NextPublish = now + 1
         self:Publish()
     end
@@ -324,20 +332,26 @@ function Runtime:Reconnect()
     self.Adapter.Supported = { AutoFarm = false, AutoCollectOrbs = false, AutoCollectLootbags = false, WalkToTarget = false }
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
-    self.Jobs:start("connect", Config.RequestTimeout, function()
-        return self.Adapter:Connect()
+    local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
+        return self.Adapter:Connect(activeJob)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
         self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) else self.Adapter.Reason
         self:Publish()
     end)
+    if not started then
+        self.State.Status = "Previous compatibility check is still returning; no new check sent."
+        self:Publish()
+        return false, self.State.Status
+    end
+    return true
 end
 
 function Runtime:Diagnostics()
     return table.concat({
         Config.Name .. " v" .. Config.Version,
-        "All automation starts disabled. Connect probes the legacy Get Coins interface.",
+        "Startup makes no game-module or network probe. The compatibility check is manual.",
         self.Adapter.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
         "Last error: " .. tostring(self.State.LastError),
@@ -347,7 +361,7 @@ end
 
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
-    elseif action == "Reconnect" then self:Reconnect()
+    elseif action == "Reconnect" then return self:Reconnect()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)
     elseif action == "Unload" then self:Destroy()
     elseif action == "Rejoin" then

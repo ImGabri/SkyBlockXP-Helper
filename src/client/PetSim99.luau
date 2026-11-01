@@ -137,15 +137,19 @@ function PetSim99:_call(method, command, ...)
     return table.unpack(result, 1, result.n)
 end
 
-function PetSim99:_readSnapshot(probe)
+function PetSim99:_readSnapshot(probe, active)
     local generation = self._generation
+    local function current()
+        return generation == self._generation and not self._destroyed and (not active or active())
+    end
+    if not current() then error("Coin read canceled before networking.", 0) end
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
     local records = if returned.n == 1 then returned[1] else nil
     -- Status+payload responses must pass the same concrete coin validation.
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
         records = returned[2]
     end
-    if generation ~= self._generation or self._destroyed then error("Coin read canceled by reconnect or unload.", 0) end
+    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     local root = self:_root()
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
@@ -192,8 +196,9 @@ function PetSim99:_readSnapshot(probe)
     if probe and #candidates == 0 then
         error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin BasePart. Stand near event coins and reconnect.", 0)
     end
+    if not current() then error("Pet read canceled before module access.", 0) end
     local ok, equipped = pcall(self._petCmds.GetEquipped)
-    if generation ~= self._generation or self._destroyed then error("Pet read canceled by reconnect or unload.", 0) end
+    if not current() then error("Pet read canceled by timeout, reconnect or unload.", 0) end
     if not ok then error("PetCmds.GetEquipped failed: " .. tostring(equipped), 0) end
     if type(equipped) ~= "table" then error("PetCmds.GetEquipped returned an unsupported value; expected pet records.", 0) end
     local pets, seen = {}, {}
@@ -211,9 +216,13 @@ function PetSim99:_readSnapshot(probe)
     return { Candidates = candidates, Pets = pets, HealthKnown = #candidates > 0 and allHealthKnown }
 end
 
-function PetSim99:Connect()
+function PetSim99:Connect(active)
+    if active and not active() then return self end
     self._generation += 1
     local generation = self._generation
+    local function current()
+        return generation == self._generation and not self._destroyed and (not active or active())
+    end
     self._destroyed, self._connected = false, false
     self.Supported = supportedNone()
     self._network, self._petCmds, self._world, self._coins, self._things = nil, nil, nil, nil, nil
@@ -253,7 +262,7 @@ function PetSim99:Connect()
         end
         local network = requireModule(networkModule, networkPath)
         local petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds")
-        if generation ~= self._generation or self._destroyed then return end
+        if not current() then return end
         self._network, self._petCmds = network, petCmds
         self._networkExports = exportSummary(network)
         self._petExports = exportSummary(petCmds)
@@ -271,11 +280,11 @@ function PetSim99:Connect()
         local worldModule = client:FindFirstChild("WorldCmds")
         if worldModule and worldModule:IsA("ModuleScript") then
             local loaded, value = pcall(require, worldModule)
-            if generation ~= self._generation or self._destroyed then return end
+            if not current() then return end
             if loaded and type(value) == "table" and type(value.HasArea) == "function" then self._world = value end
         end
-        local snapshot = self:_readSnapshot(true)
-        if generation ~= self._generation or self._destroyed then return end
+        local snapshot = self:_readSnapshot(true, active)
+        if not current() then return end
         self._connected = true
         self.Supported.AutoFarm, self.Supported.WalkToTarget = true, true
         local orbs = things:FindFirstChild("Orbs")
@@ -285,17 +294,19 @@ function PetSim99:Connect()
         self.Reason = string.format("Experimental legacy protocol probe passed (%d loaded coins, %d equipped pets); Classic Event farming still unverified in game.",
             #snapshot.Candidates, #snapshot.Pets)
     end)
-    if generation ~= self._generation or self._destroyed then return self end
+    if not current() then return self end
     if not ok then self:_block(tostring(message)) end
     self:_report()
     return self
 end
 
-function PetSim99:Snapshot()
+function PetSim99:Snapshot(active)
     if not self._connected or self._destroyed then error(self.Reason, 0) end
     local generation = self._generation
-    local ok, result = pcall(self._readSnapshot, self, false)
-    if generation ~= self._generation or self._destroyed then error("Snapshot canceled by reconnect or unload.", 0) end
+    local ok, result = pcall(self._readSnapshot, self, false, active)
+    if generation ~= self._generation or self._destroyed or (active and not active()) then
+        error("Snapshot canceled by timeout, reconnect or unload.", 0)
+    end
     if not ok then self:_fail(tostring(result)) end
     return result
 end

@@ -433,7 +433,7 @@ function Interface.mount(spec)
     input("Farm", "Target name contains", "NameFilter")
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
-    actionButton("Farm", "Reconnect game adapter", "Reconnect")
+    actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     toggle("Misc", "Custom movement", "MovementEnabled")
