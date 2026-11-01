@@ -312,6 +312,63 @@ assertBlocked(adapter)
 assert(#calls == 0 and nativeCalls == 0, "canceled facade load continued into client networking")
 ''')
 
+    def test_cancel_during_lazy_facade_lookup_stops_before_other_modules(self):
+        for canceled_key in ["Network", "PetCmds"]:
+            with self.subTest(canceled_key=canceled_key):
+                self.run_case('local canceledKey = "' + canceled_key + '"\n' + '''
+library.ClassName = "ModuleScript"
+local live, afterCancel = true, 0
+exports[library] = setmetatable({}, { __index = function(_, key)
+    if not live then afterCancel += 1 end
+    if key == canceledKey then live = false end
+    if key == "Network" then return network end
+    if key == "PetCmds" then return exports[petsModule] end
+end })
+local adapter = PetSim99.new():Connect(function() return live end)
+assertBlocked(adapter)
+assert(afterCancel == 0, "canceled facade kept resolving other modules")
+assert(#calls == 0)
+''')
+
+    def test_stale_lazy_facade_cannot_replace_a_new_connection(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+local adapter = PetSim99.new()
+local petCmds = exports[petsModule]
+local staleNetwork = { Invoke = function() error("stale facade used") end, Fire = network.Fire }
+exports[library] = setmetatable({}, { __index = function(_, key)
+    if key == "Network" then
+        exports[library] = { Network = network, PetCmds = petCmds }
+        adapter:Connect()
+        assert(adapter.Supported.AutoFarm, adapter.Reason)
+        return staleNetwork
+    end
+    if key == "PetCmds" then return petCmds end
+end })
+adapter:Connect()
+local snapshot = adapter:Snapshot()
+assert(adapter.Supported.AutoFarm and #snapshot.Candidates == 1, adapter.Reason)
+''')
+
+    def test_stale_export_inspection_cannot_replace_new_connection_world(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+local adapter = PetSim99.new()
+local petCmds = exports[petsModule]
+local staleWorld = { HasArea = function() return false end }
+local proxy = setmetatable({}, { __index = function(_, key)
+    if key == "Invoke" then
+        exports[library] = { Network = network, PetCmds = petCmds }
+        adapter:Connect()
+    end
+    return network[key]
+end })
+exports[library] = { Network = proxy, PetCmds = petCmds, WorldCmds = staleWorld }
+adapter:Connect()
+local snapshot = adapter:Snapshot()
+assert(adapter.Supported.AutoFarm and #snapshot.Candidates == 1, "stale facade replaced current area filtering")
+''')
+
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
         for change in ["game.PlaceId = 1", "game.GameId = 1"]:
             with self.subTest(change=change):
