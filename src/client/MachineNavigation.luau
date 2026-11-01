@@ -45,11 +45,6 @@ end
 
 function Navigation:Approach(variant, active)
     if active and not active() then return false end
-    if self._owner and coroutine.status(self._owner) == "dead" then
-        self:_halt(self._state)
-        self._state, self._owner = nil, nil
-    end
-    if self._owner then error("A previous machine walk is still returning; no overlapping walk started.", 0) end
     local names = { Gold = "Gold Machine", Rainbow = "Rainbow Machine" }
     local name = names[variant]
     if not name then error("Choose Gold or Rainbow machine navigation.", 0) end
@@ -60,17 +55,51 @@ function Navigation:Approach(variant, active)
     if not machine or not machine:IsA("Model") or not pad or not pad:IsA("BasePart") or not position(pad.Position) then
         error(name .. " has no loaded __MAP.Interactive model with a Pad part. Enter its world and load the machine normally.", 0)
     end
+    local target = pad.Position
+    return self:_walk(name, target, function()
+        return workspace:FindFirstChild("__MAP") == map and map.Parent ~= nil
+            and child(map, "Interactive") == interactive and interactive.Parent == map
+            and child(interactive, name) == machine and machine.Parent == interactive
+            and child(machine, "Pad") == pad and pad.Parent == machine and position(pad.Position)
+            and (pad.Position - target).Magnitude <= 0.1
+    end, active)
+end
+
+function Navigation:ApproachEgg(model, active)
+    if active and not active() then return false end
+    if typeof(model) ~= "Instance" or not model:IsA("Model") or not model:IsDescendantOf(workspace) then
+        error("The selected egg is not a loaded workspace Model. Enter its world and load it normally.", 0)
+    end
+    local center = child(model, "Center")
+    if not center or not center:IsA("BasePart") or not position(center.Position) then
+        error("The selected egg has no loaded Center part with a readable position.", 0)
+    end
+    local target = center.Position
+    local name = "egg " .. model.Name
+    return self:_walk(name, target, function()
+        return model:IsDescendantOf(workspace) and child(model, "Center") == center
+            and center.Parent == model and position(center.Position)
+            and (center.Position - target).Magnitude <= 0.1
+    end, active)
+end
+
+function Navigation:_walk(name, target, stillLoaded, active)
+    if active and not active() then return false end
+    if self._owner and coroutine.status(self._owner) == "dead" then
+        self:_halt(self._state)
+        self._state, self._owner = nil, nil
+    end
+    if self._owner then error("A previous machine walk is still returning; no overlapping walk started.", 0) end
     local character = self.Player.Character
     local root = child(character, "HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not character.Parent or not root or not root:IsA("BasePart") or not position(root.Position)
         or not humanoid or not finite(humanoid.Health) or humanoid.Health <= 0 then
-        error("A living character with HumanoidRootPart is required to walk to a machine.", 0)
+        error("A living character with HumanoidRootPart is required to walk to an interaction.", 0)
     end
     local generation = self._generation
     local owner = coroutine.running()
     local state = { character = character, root = root, humanoid = humanoid, moving = false }
-    local target = pad.Position
     local timeout = if finite(Config.TravelTimeout) and Config.TravelTimeout > 0 then Config.TravelTimeout else 60
     local deadline = os.clock() + timeout
     self._state, self._owner = state, owner
@@ -78,12 +107,10 @@ function Navigation:Approach(variant, active)
     local function current()
         if self._generation ~= generation or self._state ~= state or self.Player.Character ~= character
             or not character.Parent or root.Parent ~= character or humanoid.Parent ~= character
+            or child(character, "HumanoidRootPart") ~= root or character:FindFirstChildOfClass("Humanoid") ~= humanoid
             or not finite(humanoid.Health) or humanoid.Health <= 0 or (active and not active()) then return false end
-        if workspace:FindFirstChild("__MAP") ~= map or not map.Parent or child(map, "Interactive") ~= interactive
-            or interactive.Parent ~= map or child(interactive, name) ~= machine or machine.Parent ~= interactive
-            or child(machine, "Pad") ~= pad or pad.Parent ~= machine or not position(pad.Position)
-            or (pad.Position - target).Magnitude > 0.1 then
-            error(name .. " moved or unloaded while walking; no conversion request should be sent.", 0)
+        if not stillLoaded() then
+            error(name .. " moved or unloaded while walking; no interaction request should be sent.", 0)
         end
         if not position(root.Position) then error("Character position became unreadable while walking.", 0) end
         if os.clock() >= deadline then error("Walking to " .. name .. " timed out before verified arrival.", 0) end
@@ -127,9 +154,9 @@ function Navigation:Approach(variant, active)
         end
         if not current() then return false end
         if (root.Position - target).Magnitude > ARRIVAL_DISTANCE then
-            error("Walking ended too far from " .. name .. "; no conversion request should be sent.", 0)
+            error("Walking ended too far from " .. name .. "; no interaction request should be sent.", 0)
         end
-        self:_progress("Arrived near " .. name .. "; checking conversion eligibility.")
+        self:_progress("Arrived near " .. name .. "; checking interaction eligibility.")
         if not current() then return false end
         return (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
     end)
