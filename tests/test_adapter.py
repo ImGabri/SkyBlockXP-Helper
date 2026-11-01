@@ -264,6 +264,16 @@ assert(engineLoads == 1 and nativeCalls == 0, "executor loader replaced the avai
 contains(adapter.Report, "getrenv().require")
 ''')
 
+    def test_public_facade_does_not_require_a_private_client_folder(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+library.Children = {}
+exports[library] = { Network = network, PetCmds = exports[petsModule] }
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(nativeCalls == 1)
+''')
+
     def test_public_facade_rejection_does_not_retry_the_internal_network(self):
         self.run_case('''
 library.ClassName = "ModuleScript"
