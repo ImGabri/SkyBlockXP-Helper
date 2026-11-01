@@ -175,6 +175,9 @@ function Runtime:StartCare(key, manual)
                 self.Jobs:cancel("AutoFarm")
                 self:StopNavigation()
                 if not self.Navigator:ApproachEgg(target, current) or not current() then return 0 end
+                local arrivedTarget = self.Care:GetEggTarget(egg, current)
+                if not current() then return 0 end
+                if arrivedTarget ~= target then error("Selected egg changed while approaching; no purchase sent.", 0) end
             end
             return self.Care:Hatch(egg, mode, current)
         end
