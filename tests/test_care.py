@@ -108,6 +108,38 @@ assert(nativeCalls == 0 and #calls == 0)
 assert(coroutine.close(worker))
 ''')
 
+    def test_read_only_save_inspector_reports_shapes_without_mutation(self):
+        self.run_case('''
+care:Connect()
+assert(care:InspectSave())
+contains(care.Report, "Save.Get result type=table")
+contains(care.Report, "Pets=table")
+assert(not string.find(care.Report, "normal-1", 1, true), "pet UID leaked into diagnostics")
+assert(#calls == 0, "inspection sent a game mutation request")
+''')
+
+    def test_read_only_save_inspector_reports_missing_pets_without_guessing(self):
+        self.run_case('''
+facade.Save.Get = function() return { Data = { Pets = inventory } } end
+care:Connect()
+assert(care:InspectSave())
+contains(care.Report, "Pets=nil")
+contains(care.Report, "Data.Pets=table")
+assert(not pcall(care.Convert, care, "Gold", "cat"), "conversion guessed nested save layout")
+assert(#calls == 0, "invalid save shape triggered a mutation")
+assert(#care._reserved == 0 or next(care._reserved) == nil)
+''')
+
+    def test_read_only_save_inspector_handles_nil_data_without_remote_calls(self):
+        self.run_case('''
+facade.Save.Get = function() return nil end
+care:Connect()
+assert(care:InspectSave())
+contains(care.Report, "Save.Get result type=nil")
+assert(not pcall(care.CanConvert, care, "Gold", "cat"))
+assert(#calls == 0)
+''')
+
     def test_hatch_modes_have_exact_legacy_arguments(self):
         for mode, triple, octuple in [("Single", "false", "false"), ("Triple", "true", "false"), ("Octuple", "false", "true")]:
             with self.subTest(mode=mode):

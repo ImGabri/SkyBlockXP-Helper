@@ -141,6 +141,21 @@ function Runtime:PrepareCare()
     return true
 end
 
+function Runtime:InspectSave()
+    if not self.Alive then return false, "Suite unloaded." end
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:InspectSave(activeJob)
+    end, function(ok, inspected)
+        self.State.CareStatus = if ok and inspected
+            then "Save layout inspected; see Status or Copy diagnostics" else "Save inspection unavailable; see Last Error"
+        if not ok then self.State.LastError = "Save inspection: " .. tostring(inspected) end
+        self:Publish()
+    end)
+    if not started then return false, "Pet worker busy; no overlapping Save.Get read." end
+    self:Publish()
+    return true
+end
+
 function Runtime:StartCare(key, manual)
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
@@ -561,6 +576,7 @@ function Runtime:Action(action)
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
     elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "InspectSave" then return self:InspectSave()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
         local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])

@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.3**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.4**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.3. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.4. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -54,6 +54,23 @@ not a replacement coin protocol.
 Pet tools are **independent of Get Coins**. With Direct selected, try **Pets →
 Load pet tools** separately and copy diagnostics; supported API loading,
 hatching, and conversions must each be validated in-game before trusting them.
+
+## v0.7.4: missing inventory save diagnostics
+
+The client's confirmed Direct-module load passes, but the native `Get Coins`
+call returns no data and the inspected `__THINGS.Coins` folder held zero models.
+This is not evidence of a working farm protocol; AutoFarm stays blocked. Move
+normally to an event coin area and inspect again without repeating the rejected
+network probe.
+
+Pet tools do load, but a live AutoGold attempt stopped before mutation because
+`Save.Get()` did not provide a `Pets` table. Use **Pets → Inspect save layout
+(read-only)** after **Load pet tools**. It calls `Save.Get` once and reports only
+top-level types (`Pets`, `Inventory`, `Data`, `Save`) and the type of
+nested `Pets` fields when present. It does **not** print inventory, UIDs,
+balances or pet records; it does not send any game mutation request. This
+diagnostic does not assume that nested data is safe for conversion. Conversion
+will remain unavailable until the actual save contract can be validated.
 
 ## Eggs, gold and rainbow
 

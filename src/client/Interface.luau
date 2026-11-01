@@ -483,6 +483,7 @@ function Interface.mount(spec)
         Text = "Eggs spend in-game currency. Open Inventory first; only 6 matching, eligible, unlocked pets are used. Walk mode approaches the loaded machine before converting. Off requires you to stand near it yourself. The server decides access and chances.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
+    actionButton("Pets", "Inspect save layout (read-only)", "InspectSave")
     input("Pets", "Egg name", "EggName")
     actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })

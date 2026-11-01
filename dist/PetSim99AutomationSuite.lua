@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.3",
+    Version = "0.7.4",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -608,6 +608,7 @@ function Interface.mount(spec)
         Text = "Eggs spend in-game currency. Open Inventory first; only 6 matching, eligible, unlocked pets are used. Walk mode approaches the loaded machine before converting. Off requires you to stand near it yourself. The server decides access and chances.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
+    actionButton("Pets", "Inspect save layout (read-only)", "InspectSave")
     input("Pets", "Egg name", "EggName")
     actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
@@ -1014,6 +1015,27 @@ local function number(value) return type(value) == "number" and value == value a
 local function child(parent, name) return parent and parent:FindFirstChild(name) end
 local function samePlace() return game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId end
 
+-- Structural diagnostics only: no balances, UIDs, pet details or arbitrary key values.
+-- The result shape is not permission to convert pets through an unverified schema.
+local function describeSaveShape(value)
+    if type(value) ~= "table" then return "Save.Get result type=" .. typeof(value) .. "; Pets=unavailable" end
+    local pieces = { "Save.Get result type=table" }
+    local function describeField(parent, field)
+        local ok, result = pcall(function() return parent[field] end)
+        return if ok then typeof(result) else "read-error"
+    end
+    for _, field in ipairs({ "Pets", "Inventory", "Data", "Save" }) do
+        table.insert(pieces, field .. "=" .. describeField(value, field))
+    end
+    for _, field in ipairs({ "Inventory", "Data", "Save" }) do
+        local ok, section = pcall(function() return value[field] end)
+        if ok and type(section) == "table" then
+            table.insert(pieces, field .. ".Pets=" .. describeField(section, "Pets"))
+        end
+    end
+    return table.concat(pieces, "; ")
+end
+
 function PetCare.new()
     return setmetatable({ Supported = none(), Reason = "Pet tools idle — click Load pet tools.",
         Report = "Pet tools not loaded.", Counts = { HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
@@ -1025,6 +1047,7 @@ function PetCare:_report()
         .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
         .. "\nPet-tool provider: " .. (if self._mode == "Direct" then "Library.Client + Library.Directory child modules" else "ReplicatedStorage.Library facade")
         .. " (public game modules). Legacy commands; current game acceptance unverified."
+        .. "\nSave shape: " .. (self._saveReport or "not inspected; no inventory values recorded")
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
@@ -1138,6 +1161,32 @@ function PetCare:Connect(active, mode)
     return self
 end
 
+-- A manual, read-only check. It calls Save.Get only, never invokes a conversion remote.
+function PetCare:InspectSave(active)
+    if self._destroyed or not samePlace() or not self._api or type(self._api.getSave) ~= "function" then
+        error("Load pet tools before inspecting the save layout.", 0)
+    end
+    if active and not active() then return false end
+    if self:_occupied() then error("Another pet operation is still active; no overlapping save read.", 0) end
+    local generation = self._generation
+    local owner = coroutine.running()
+    self._busy = owner
+    self._phase = "Inspecting Save.Get layout (read-only)"
+    self:_report()
+    local ok, value = pcall(self._api.getSave)
+    if self._busy == owner then self._busy = nil end
+    if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
+    if not ok then
+        self._saveReport = "Save.Get raised an error; no inventory values recorded"
+        self:_report()
+        error("Save.Get failed during read-only inspection: " .. tostring(value), 0)
+    end
+    self._saveReport = describeSaveShape(value)
+    self._phase = "Save.Get layout inspected (read-only)"
+    self:_report()
+    return true
+end
+
 function PetCare:_run(key, active, work)
     if active and not active() then return 0 end
     if self._destroyed or not samePlace() or not self._api or not self.Supported[key] then error(self.Reason, 0) end
@@ -1197,6 +1246,8 @@ function PetCare:Hatch(eggName, mode, active)
         end
         local save = self._api.getSave()
         if not current() then return 0 end
+        self._saveReport = describeSaveShape(save)
+        self:_report()
         if type(save) ~= "table" or not number(save[egg.currency]) or save[egg.currency] < egg.cost * count then
             error("Insufficient or unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
         end
@@ -1264,9 +1315,16 @@ function PetCare:_conversionBatch(variant, selected, current)
     if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
     local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
         or definition.rarity == "Exclusive" or definition.rarity == "Event"
+    self._phase = "Reading Save.Get for conversion eligibility"
+    self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    self._saveReport = describeSaveShape(save)
+    self:_report()
+    if type(save) ~= "table" or type(save.Pets) ~= "table" then
+        error("Save.Get did not provide a Pets table (" .. self._saveReport
+            .. "). No pets submitted. Use Inspect save layout for read-only diagnostics.", 0)
+    end
     local equipped = self._api.getEquipped()
     if not current() then return nil end
     if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
@@ -2239,6 +2297,21 @@ function Runtime:PrepareCare()
     return true
 end
 
+function Runtime:InspectSave()
+    if not self.Alive then return false, "Suite unloaded." end
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:InspectSave(activeJob)
+    end, function(ok, inspected)
+        self.State.CareStatus = if ok and inspected
+            then "Save layout inspected; see Status or Copy diagnostics" else "Save inspection unavailable; see Last Error"
+        if not ok then self.State.LastError = "Save inspection: " .. tostring(inspected) end
+        self:Publish()
+    end)
+    if not started then return false, "Pet worker busy; no overlapping Save.Get read." end
+    self:Publish()
+    return true
+end
+
 function Runtime:StartCare(key, manual)
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
@@ -2659,6 +2732,7 @@ function Runtime:Action(action)
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
     elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "InspectSave" then return self:InspectSave()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
         local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])
