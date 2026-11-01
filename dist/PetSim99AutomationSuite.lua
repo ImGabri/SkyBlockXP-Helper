@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.6.1",
+    Version = "0.7.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -586,6 +586,7 @@ function Interface.mount(spec)
     input("Farm", "Target name contains", "NameFilter")
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
+    actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
@@ -640,7 +641,7 @@ function Interface.mount(spec)
     })
     table.insert(renderers, function()
         details.Text = string.format(
-            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
+            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nLIVE DIAGNOSTICS\nFarm check: %s\nPet tools: %s\nWorkers:\n%s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
             tostring(snapshot.Status or "Ready"),
             tostring(snapshot.Target or "None"),
             tostring(snapshot.EquippedPets or 0),
@@ -651,6 +652,9 @@ function Interface.mount(spec)
             tostring(snapshot.HatchRequests or 0),
             tostring(snapshot.GoldRequests or 0),
             tostring(snapshot.RainbowRequests or 0),
+            tostring(snapshot.ProbeStage or "not started"),
+            tostring(snapshot.CareStage or "not started"),
+            tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
         )
@@ -760,6 +764,21 @@ function Jobs:blocked(name)
     return slot ~= nil and slot.cancelled == true
 end
 
+function Jobs:summary()
+    local names = {}
+    for name in pairs(self.slots) do table.insert(names, name) end
+    table.sort(names)
+    if #names == 0 then return "No active jobs." end
+    local lines, now = {}, self.driver.clock()
+    for _, name in ipairs(names) do
+        local slot = self.slots[name]
+        local state = if slot.cancelled then "cancellation pending" else "running"
+        table.insert(lines, string.format("%s: %s (%.1fs / %.1fs)",
+            name, state, math.max(0, now - slot.started), slot.timeout))
+    end
+    return table.concat(lines, "\n")
+end
+
 function Jobs:start(name, timeout, work, complete)
     if self.slots[name] then return false end
     local slot = { started = self.driver.clock(), timeout = timeout, complete = complete, cancelled = false }
@@ -808,7 +827,10 @@ function Jobs:tick()
         local name, slot = entry.name, entry.slot
         if self.slots[name] == slot and not slot.cancelled then
             self:cancel(name)
-            slot.complete(false, "Request timed out. No overlapping retry is allowed while that worker is still running.")
+            local pending = self.slots[name] == slot
+            slot.complete(false, if pending
+                then "Request timed out. Native cancellation did not finish; retry blocked until worker exits."
+                else "Request timed out; worker cancelled. No automatic retry was sent.")
         end
     end
 end
@@ -933,9 +955,13 @@ end
 
 function PetCare:_request(key, command, counter, current, ...)
     if not current() then return 0 end
+    self._phase = "Waiting for " .. command .. " acknowledgement"
+    self:_report()
     self.Counts[counter] += 1
     local response = table.pack(pcall(self._api.invoke, command, ...))
     if not current() then return 0 end
+    self._phase = "Validating " .. command .. " reply"
+    self:_report()
     if not response[1] or response.n < 2 or response[2] ~= true then
         self.Supported[key] = false
         self.Reason = command .. " was rejected or gave no true acknowledgement; feature stopped."
@@ -1346,6 +1372,52 @@ function PetSim99:_readSnapshot(probe, active)
     end
     self._assigned = assignments
     return { Candidates = candidates, Pets = pets, HealthKnown = #candidates > 0 and allHealthKnown }
+end
+
+-- Non-invasive preflight. Reads only local objects; no require, Invoke or Fire.
+-- A green local check is not proof that the game accepts the coin protocol.
+function PetSim99:Inspect()
+    local storage = game:GetService("ReplicatedStorage")
+    local library = storage:FindFirstChild("Library")
+    local client = library and library:FindFirstChild("Client")
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local issues = {}
+    if game.PlaceId ~= Config.Target.PlaceId or game.GameId ~= Config.Target.UniverseId then
+        table.insert(issues, "Wrong destination: join the PS99 Classic Event place.")
+    end
+    if not library or not (library:IsA("ModuleScript") or library:IsA("Folder")) then
+        table.insert(issues, "ReplicatedStorage.Library is not loaded.")
+    elseif library:IsA("Folder") and not client then
+        table.insert(issues, "Legacy Library.Client folder is missing.")
+    end
+    if not coins or not coins:IsA("Folder") then
+        table.insert(issues, "No loaded __THINGS.Coins folder.")
+    elseif #coins:GetChildren() == 0 then
+        table.insert(issues, "No coin models are loaded nearby.")
+    end
+    if not root or not root:IsA("BasePart") then
+        table.insert(issues, "Character HumanoidRootPart is unavailable.")
+    end
+    self._diagnostics = table.concat({
+        "LOCAL PREFLIGHT (no game modules or network touched)",
+        "PlaceId: " .. tostring(game.PlaceId) .. " (expected " .. tostring(Config.Target.PlaceId) .. ")",
+        "UniverseId: " .. tostring(game.GameId) .. " (expected " .. tostring(Config.Target.UniverseId) .. ")",
+        "Library: " .. (if library then library.ClassName else "missing"),
+        "Library.Client: " .. childSummary(client, 50),
+        "__THINGS: " .. childSummary(things, 40),
+        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Character root: " .. (if root then "present" else "missing"),
+        "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
+    }, "\n")
+    self._phase = "Local preflight finished; no remote request sent"
+    self:_report()
+    return #issues == 0, if #issues == 0
+        then "Local objects present. Run the separate compatibility check to test game protocol."
+        else table.concat(issues, "; ")
 end
 
 function PetSim99:Connect(active)
@@ -1831,8 +1903,10 @@ function Runtime:PrepareCare()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:Connect(activeJob)
     end, function(ok, result)
-        self.State.CareStatus = if ok then self.Care.Reason else "Pet tools failed to load"
-        self.State.LastError = if ok then "" else tostring(result) .. " [Pet stage: " .. tostring(self.Care._phase or "unknown") .. "]"
+        local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
+        self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
+        self.State.LastError = if loaded then "" else (if ok then tostring(self.Care.Reason) else tostring(result))
+            .. " [Pet stage: " .. tostring(self.Care._phase or "unknown") .. "]"
         self:Publish()
     end)
     if not started then return false, "A previous pet operation is still returning; no new request sent." end
@@ -1891,7 +1965,14 @@ end
 
 function Runtime:Step()
     self:StepCare()
-    if not self.Ready then return end
+    if not self.Ready then
+        local now = os.clock()
+        if now >= (self.NextPublish or 0) and (self.Jobs:busy("connect") or self.Jobs:busy("care")) then
+            self.NextPublish = now + 1
+            self:Publish()
+        end
+        return
+    end
     local now = os.clock()
     local character = self.Player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -1979,6 +2060,9 @@ end
 function Runtime:Publish()
     if not self.Alive then return end
     self.State.Options = table.clone(self.Options)
+    self.State.WorkerStatus = self.Jobs:summary()
+    self.State.ProbeStage = self.Adapter._phase or "not started"
+    self.State.CareStage = self.Care._phase or "not started"
     self.State.Supported = table.clone(self.Adapter.Supported)
     for key, supported in pairs(self.Care.Supported) do self.State.Supported[key] = supported end
     for field, count in pairs(self.Care.Counts) do self.State[field] = count end
@@ -2111,10 +2195,35 @@ function Runtime:StopAll()
     self:Publish()
 end
 
+function Runtime:InspectEnvironment()
+    if not self.Alive then return false, "Suite unloaded." end
+    if self.Jobs:busy("connect") then
+        return false, "A compatibility check is still active. No parallel preflight was started."
+    end
+    local ok, ready, message = pcall(function() return self.Adapter:Inspect() end)
+    if not ok then
+        message = tostring(ready)
+        ready = false
+    end
+    self.State.Status = if ready then "Local preflight passed — protocol not tested" else "Local preflight needs attention"
+    self.State.LastError = if ready then "" else tostring(message)
+    self:Publish()
+    return ready, message
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
     self.Adapter.Supported = { AutoFarm = false, AutoCollectOrbs = false, AutoCollectLootbags = false, WalkToTarget = false }
+    if type(self.Adapter.Inspect) == "function" then
+        local ok, ready, message = pcall(function() return self.Adapter:Inspect() end)
+        if not ok or not ready then
+            self.State.Status = "Local preflight failed; no network request sent"
+            self.State.LastError = if ok then tostring(message) else tostring(ready)
+            self:Publish()
+            return false, self.State.LastError
+        end
+    end
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
@@ -2140,6 +2249,7 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
@@ -2151,6 +2261,7 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "InspectEnvironment" then return self:InspectEnvironment()
     elseif action == "PrepareCare" then return self:PrepareCare()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"

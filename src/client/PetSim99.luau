@@ -243,6 +243,52 @@ function PetSim99:_readSnapshot(probe, active)
     return { Candidates = candidates, Pets = pets, HealthKnown = #candidates > 0 and allHealthKnown }
 end
 
+-- Non-invasive preflight. Reads only local objects; no require, Invoke or Fire.
+-- A green local check is not proof that the game accepts the coin protocol.
+function PetSim99:Inspect()
+    local storage = game:GetService("ReplicatedStorage")
+    local library = storage:FindFirstChild("Library")
+    local client = library and library:FindFirstChild("Client")
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local issues = {}
+    if game.PlaceId ~= Config.Target.PlaceId or game.GameId ~= Config.Target.UniverseId then
+        table.insert(issues, "Wrong destination: join the PS99 Classic Event place.")
+    end
+    if not library or not (library:IsA("ModuleScript") or library:IsA("Folder")) then
+        table.insert(issues, "ReplicatedStorage.Library is not loaded.")
+    elseif library:IsA("Folder") and not client then
+        table.insert(issues, "Legacy Library.Client folder is missing.")
+    end
+    if not coins or not coins:IsA("Folder") then
+        table.insert(issues, "No loaded __THINGS.Coins folder.")
+    elseif #coins:GetChildren() == 0 then
+        table.insert(issues, "No coin models are loaded nearby.")
+    end
+    if not root or not root:IsA("BasePart") then
+        table.insert(issues, "Character HumanoidRootPart is unavailable.")
+    end
+    self._diagnostics = table.concat({
+        "LOCAL PREFLIGHT (no game modules or network touched)",
+        "PlaceId: " .. tostring(game.PlaceId) .. " (expected " .. tostring(Config.Target.PlaceId) .. ")",
+        "UniverseId: " .. tostring(game.GameId) .. " (expected " .. tostring(Config.Target.UniverseId) .. ")",
+        "Library: " .. (if library then library.ClassName else "missing"),
+        "Library.Client: " .. childSummary(client, 50),
+        "__THINGS: " .. childSummary(things, 40),
+        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Character root: " .. (if root then "present" else "missing"),
+        "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
+    }, "\n")
+    self._phase = "Local preflight finished; no remote request sent"
+    self:_report()
+    return #issues == 0, if #issues == 0
+        then "Local objects present. Run the separate compatibility check to test game protocol."
+        else table.concat(issues, "; ")
+end
+
 function PetSim99:Connect(active)
     if active and not active() then return self end
     self._generation += 1

@@ -112,9 +112,13 @@ end
 
 function PetCare:_request(key, command, counter, current, ...)
     if not current() then return 0 end
+    self._phase = "Waiting for " .. command .. " acknowledgement"
+    self:_report()
     self.Counts[counter] += 1
     local response = table.pack(pcall(self._api.invoke, command, ...))
     if not current() then return 0 end
+    self._phase = "Validating " .. command .. " reply"
+    self:_report()
     if not response[1] or response.n < 2 or response[2] ~= true then
         self.Supported[key] = false
         self.Reason = command .. " was rejected or gave no true acknowledgement; feature stopped."
