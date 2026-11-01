@@ -24,6 +24,14 @@ local defaults = {
     NameFilter = "",
     Radius = 250,
     FarmInterval = 1,
+    EggName = "",
+    HatchMode = "Single",
+    HatchInterval = 2,
+    AutoHatch = false,
+    ConversionSpecies = "",
+    ConversionInterval = 3,
+    AutoGold = false,
+    AutoRainbow = false,
     MovementEnabled = false,
     Fullbright = false,
     AntiIdle = false,
@@ -88,7 +96,7 @@ function Interface.mount(spec)
     end
 
     local gui = make("ScreenGui", {
-        Name = "PetSimAutomationUi",
+        Name = "PetSim99AutomationSuiteUi",
         ResetOnSpawn = false,
         DisplayOrder = 40,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -272,10 +280,11 @@ function Interface.mount(spec)
         end
     end
 
-    for index, name in ipairs({ "Farm", "Misc", "Status" }) do
+    local tabNames = { "Farm", "Pets", "Misc", "Status" }
+    for index, name in ipairs(tabNames) do
         local button = make("TextButton", {
             Name = name,
-            Size = UDim2.new(1 / 3, -4, 1, 0),
+            Size = UDim2.new(1 / #tabNames, -6 * (#tabNames - 1) / #tabNames, 1, 0),
             BackgroundColor3 = colors.surface,
             BorderSizePixel = 0,
             Font = Enum.Font.GothamMedium,
@@ -458,6 +467,35 @@ function Interface.mount(spec)
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
+    rowOrder += 1
+    label(pages.Pets, {
+        Size = UDim2.new(1, -10, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        TextSize = 11,
+        TextWrapped = true,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = colors.muted,
+        LayoutOrder = rowOrder,
+        Text = "Eggs spend in-game currency. Conversions use exactly 6 eligible pets of one selected species. Equipped, locked/favorite, shiny, hardcore and premium pets are excluded. The server decides conversion chances; current event support needs testing.",
+    })
+    actionButton("Pets", "Load pet tools", "PrepareCare")
+    input("Pets", "Egg name", "EggName")
+    cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
+    input("Pets", "Hatch interval (seconds)", "HatchInterval", 1, 30)
+    actionButton("Pets", "Open egg once", "HatchOnce")
+    toggle("Pets", "Auto hatch", "AutoHatch")
+    actionButton("Pets", "Open egg menu", "OpenEggMenu")
+    input("Pets", "Convert species (exact name / ID)", "ConversionSpecies")
+    input("Pets", "Conversion interval (seconds)", "ConversionInterval", 2, 30)
+    actionButton("Pets", "Convert 6 to gold", "GoldOnce")
+    toggle("Pets", "Auto gold (6 normal pets)", "AutoGold")
+    actionButton("Pets", "Open gold menu", "OpenGoldMenu")
+    actionButton("Pets", "Convert 6 gold to rainbow", "RainbowOnce")
+    toggle("Pets", "Auto rainbow (6 gold pets)", "AutoRainbow")
+    actionButton("Pets", "Open rainbow menu", "OpenRainbowMenu")
+    actionButton("Pets", "Open inventory", "OpenInventory")
+    actionButton("Pets", "STOP ALL", "StopAll", true)
+
     toggle("Misc", "Custom movement", "MovementEnabled")
     input("Misc", "Walk speed", "WalkSpeed", 8, 100)
     input("Misc", "Jump power", "JumpPower", 0, 150)
@@ -478,18 +516,23 @@ function Interface.mount(spec)
     })
     table.insert(renderers, function()
         details.Text = string.format(
-            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
+            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
             tostring(snapshot.Status or "Ready"),
             tostring(snapshot.Target or "None"),
             tostring(snapshot.EquippedPets or 0),
             tostring(snapshot.Farmed or 0),
             tostring(snapshot.CollectedOrbs or 0),
             tostring(snapshot.CollectedLootbags or 0),
+            tostring(snapshot.CareStatus or "Pet tools not loaded"),
+            tostring(snapshot.HatchRequests or 0),
+            tostring(snapshot.GoldRequests or 0),
+            tostring(snapshot.RainbowRequests or 0),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
         )
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")
+    actionButton("Status", "Clear status error", "ClearError")
     actionButton("Status", "Unload suite and restore settings", "Unload", true)
 
     connect(collapseButton.Activated, function()
