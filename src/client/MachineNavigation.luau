@@ -31,9 +31,14 @@ end
 function Navigation:_halt(state)
     if not state or not state.moving then return end
     state.moving = false
-    if state.root.Parent and state.humanoid.Parent and position(state.root.Position) then
-        pcall(function() state.humanoid:MoveTo(state.root.Position) end)
-    end
+    local character = self.Player.Character
+    if character ~= state.character or not character.Parent or state.humanoid.Parent ~= character
+        or character:FindFirstChildOfClass("Humanoid") ~= state.humanoid then return end
+    -- A rig may replace its root without replacing the character/humanoid.
+    -- Halt at the current root, never drive that rig toward a captured old part.
+    local root = child(character, "HumanoidRootPart")
+    if not root or not root:IsA("BasePart") or root.Parent ~= character or not position(root.Position) then return end
+    pcall(function() state.humanoid:MoveTo(root.Position) end)
 end
 
 function Navigation:Stop()
