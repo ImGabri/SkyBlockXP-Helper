@@ -98,6 +98,7 @@ local equipped = { { uid = "pet-a" }, { uid = "pet-b" } }
 local calls = {}
 local nativeCalls = 0
 local denyRequire = false
+local getrenv
 local invokeHook, fireHook
 local network = {}
 function network.Invoke(command, ...)
@@ -231,6 +232,74 @@ end
 local ok, count = pcall(adapter.Collect, adapter, "orbs", 30, function() return live end)
 assert(ok and count == 0, "canceled pickup error escaped")
 assert(adapter.Supported.AutoFarm, "canceled pickup error disabled the current connection")
+''')
+
+    def test_public_library_facade_is_used_before_internal_client_modules(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+exports[library] = { Network = network, PetCmds = exports[petsModule] }
+exports[networkModule] = { Invoke = function() error("private client module must not be used") end }
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(nativeCalls == 1, "public facade loaded internal modules separately")
+contains(adapter.Report, "ReplicatedStorage.Library")
+''')
+
+    def test_original_game_module_loader_is_preferred_when_available(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+local engineLoads = 0
+local facade = { Network = network, PetCmds = exports[petsModule] }
+getrenv = function()
+    return { require = function(module)
+        assert(module == library)
+        engineLoads += 1
+        return facade
+    end }
+end
+denyRequire = true
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(engineLoads == 1 and nativeCalls == 0, "executor loader replaced the available game loader")
+contains(adapter.Report, "getrenv().require")
+''')
+
+    def test_public_facade_rejection_does_not_retry_the_internal_network(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+exports[library] = { Network = {}, PetCmds = exports[petsModule] }
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+assert(nativeCalls == 1 and #calls == 0, "rejected public facade fell back to internal networking")
+''')
+
+    def test_facade_proxy_reports_known_callable_exports_without_enumeration(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+local proxy = setmetatable({}, { __index = network })
+assert(next(proxy) == nil)
+exports[library] = { Network = proxy, PetCmds = exports[petsModule] }
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(nativeCalls == 1, "proxy facade was ignored")
+contains(adapter.Report, "Invoke:function")
+contains(adapter.Report, "Fire:function")
+''')
+
+    def test_cancel_during_public_facade_load_leaves_features_disabled(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+local live = true
+getrenv = function()
+    return { require = function(module)
+        assert(module == library)
+        live = false
+        return { Network = network, PetCmds = exports[petsModule] }
+    end }
+end
+local adapter = PetSim99.new():Connect(function() return live end)
+assertBlocked(adapter)
+assert(#calls == 0 and nativeCalls == 0, "canceled facade load continued into client networking")
 ''')
 
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
