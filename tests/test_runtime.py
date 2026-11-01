@@ -23,6 +23,7 @@ local clock = 100
 local os = { clock = function() return clock end }
 local taskErrors, spawned = {}, {}
 local nativeCancelThrows = false
+local setclipboard
 local task = {}
 function task.spawn(callback)
     local thread = coroutine.create(callback)
@@ -270,6 +271,75 @@ assert(runtime.Options.EggName == "Starter Egg")
 assert(runtime:Action("NextSpecies"))
 assert(runtime.Options.ConversionSpecies == "cat")
 assert(care.HatchCalls == 0 and care.ConvertCalls == 0)
+runtime:Destroy()
+''')
+
+    def test_pet_preparation_and_operation_failures_stop_and_report(self):
+        self.run_case('''
+careHook = function() error("library unavailable") end
+assert(runtime:Action("PrepareCare"))
+contains(runtime.State.LastError, "library unavailable")
+assert(not runtime:SetOption("AutoHatch", true))
+careHook = nil
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+careHook = function(kind) if kind == "Hatch" then error("hatch rejected") end end
+runtime:SetOption("AutoHatch", true)
+runtime:Step()
+assert(not runtime.Options.AutoHatch)
+contains(runtime.State.LastError, "hatch rejected")
+runtime:Destroy()
+''')
+
+    def test_pending_pet_work_blocks_manual_actions_and_preparation(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+nativeCancelThrows = true
+careHook = function(kind) if kind == "Hatch" then coroutine.yield("pending") end end
+assert(runtime:Action("HatchOnce"))
+local pending = spawned[#spawned]
+assert(not runtime:Action("GoldOnce"))
+assert(not runtime:Action("PrepareCare"))
+assert(care.ConnectCalls == 1 and care.ConvertCalls == 0)
+assert(coroutine.resume(pending))
+assert(care.Counts.HatchRequests == 0)
+runtime:Destroy()
+''')
+
+    def test_respawn_cancels_pet_work_and_restores_original_movement(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("MovementEnabled", true)
+runtime:SetOption("EggName", "Starter Egg")
+nativeCancelThrows = true
+careHook = function(kind) if kind == "Hatch" then coroutine.yield("pending") end end
+runtime:Action("HatchOnce")
+local pending = spawned[#spawned]
+local replacement = { Parent = workspace, WaitForChild = function() return nil end,
+    FindFirstChild = function() return nil end }
+player.Character = replacement
+player.CharacterAdded:Fire(replacement)
+assert(humanoid.WalkSpeed == 17)
+assert(coroutine.resume(pending))
+assert(care.Counts.HatchRequests == 0)
+runtime:Destroy()
+''')
+
+    def test_clipboard_and_rejoin_failures_are_visible_and_recoverable(self):
+        self.run_case('''
+setclipboard = function() error("clipboard denied") end
+assert(not runtime:Action("CopyDiagnostics"))
+contains(runtime.State.LastError, "Clipboard failed")
+local copied
+setclipboard = function(value) copied = value end
+assert(runtime:Action("CopyDiagnostics"))
+contains(copied, Config.Name)
+contains(copied, "Care fixture")
+runtime:SetOption("Fullbright", true)
+teleport.Teleport = function() error("teleport rejected") end
+assert(not runtime:Action("Rejoin"))
+assert(not runtime.Options.Fullbright and Lighting.Brightness == 1)
 runtime:Destroy()
 ''')
 
