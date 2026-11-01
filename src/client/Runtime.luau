@@ -276,8 +276,8 @@ function Runtime:StepHeavenSweep()
             self:StopHeavenSweep()
             return
         end
-        -- Let the in-game cursor target update before simulating the click.
-        task.wait(0.04)
+        -- Move and click in the same scheduler step. Avoid yielding here:
+        -- StopAll and the existing worker tests must stay synchronous.
         if not self.Options.HeavenIslandSweep or not self.Alive then return end
     else
         -- If cursor moving isn't supported, click only at the user's own cursor.
