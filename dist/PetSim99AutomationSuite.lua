@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.5.0",
+    Version = "0.6.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -24,6 +24,14 @@ return table.freeze({
         NameFilter = "",
         Radius = 200,
         FarmInterval = 0.75,
+        AutoHatch = false,
+        AutoGold = false,
+        AutoRainbow = false,
+        EggName = "",
+        HatchMode = "Single",
+        HatchInterval = 3,
+        ConversionSpecies = "",
+        ConversionInterval = 3,
         MovementEnabled = false,
         WalkSpeed = 24,
         JumpPower = 50,
@@ -35,6 +43,78 @@ return table.freeze({
     RetryLimit = 3,
     ReassignSeconds = 10,
 })
+end
+end
+
+do
+__factories["ConversionPolicy.luau"] = function(__require)
+--!strict
+-- Pure selection over caller-normalized records, never raw game inventory.
+-- The caller must establish eligibility and protection from a verified schema.
+local ConversionPolicy = {}
+
+local function text(value: any): boolean
+    return type(value) == "string" and string.find(value, "%S") ~= nil
+end
+
+function ConversionPolicy.NextBatch(pets: any, targetVariant: any): ({ string }?, string?)
+    local sourceVariant = if targetVariant == "Gold" then "Normal"
+        elseif targetVariant == "Rainbow" then "Gold" else nil
+    if not sourceVariant then
+        return nil, "Choose Gold or Rainbow conversion."
+    end
+    if type(pets) ~= "table" then
+        return nil, "Expected a normalized pet array."
+    end
+    local size = #pets
+    for key in pairs(pets) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 or key > size then
+            return nil, "Expected a dense normalized pet array."
+        end
+    end
+    for index = 1, size do
+        if pets[index] == nil then return nil, "Expected a dense normalized pet array." end
+    end
+
+    -- Duplicate identifiers invalidate every record with that UID, including
+    -- an otherwise eligible record duplicated by a protected/malformed record.
+    local occurrences: { [string]: number } = {}
+    for _, pet in ipairs(pets) do
+        if type(pet) ~= "table" then continue end
+        local record = pet :: { [string]: any }
+        if text(record.uid) then
+            occurrences[record.uid] = (occurrences[record.uid] or 0) + 1
+        end
+    end
+    local groups: { [string]: { string } } = {}
+    for _, pet in ipairs(pets) do
+        if type(pet) ~= "table" then continue end
+        local record = pet :: { [string]: any }
+        if text(record.uid) and text(record.species)
+            and occurrences[record.uid] == 1 and record.variant == sourceVariant
+            and record.protected == false and record.equipped == false and record.eligible == true then
+            local group = groups[record.species]
+            if not group then
+                group = {}
+                groups[record.species] = group
+            end
+            table.insert(group, record.uid)
+        end
+    end
+    local species: { string } = {}
+    for name, group in pairs(groups) do
+        if #group >= 6 then table.insert(species, name) end
+    end
+    table.sort(species)
+    if #species == 0 then
+        return nil, "Six eligible, unprotected and unequipped pets of one species are required."
+    end
+    local chosen = groups[species[1]]
+    table.sort(chosen)
+    return { chosen[1], chosen[2], chosen[3], chosen[4], chosen[5], chosen[6] }, nil
+end
+
+return ConversionPolicy
 end
 end
 
@@ -66,6 +146,14 @@ local defaults = {
     NameFilter = "",
     Radius = 250,
     FarmInterval = 1,
+    EggName = "",
+    HatchMode = "Single",
+    HatchInterval = 2,
+    AutoHatch = false,
+    ConversionSpecies = "",
+    ConversionInterval = 3,
+    AutoGold = false,
+    AutoRainbow = false,
     MovementEnabled = false,
     Fullbright = false,
     AntiIdle = false,
@@ -130,7 +218,7 @@ function Interface.mount(spec)
     end
 
     local gui = make("ScreenGui", {
-        Name = "PetSimAutomationUi",
+        Name = "PetSim99AutomationSuiteUi",
         ResetOnSpawn = false,
         DisplayOrder = 40,
         ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -314,10 +402,11 @@ function Interface.mount(spec)
         end
     end
 
-    for index, name in ipairs({ "Farm", "Misc", "Status" }) do
+    local tabNames = { "Farm", "Pets", "Misc", "Status" }
+    for index, name in ipairs(tabNames) do
         local button = make("TextButton", {
             Name = name,
-            Size = UDim2.new(1 / 3, -4, 1, 0),
+            Size = UDim2.new(1 / #tabNames, -6 * (#tabNames - 1) / #tabNames, 1, 0),
             BackgroundColor3 = colors.surface,
             BorderSizePixel = 0,
             Font = Enum.Font.GothamMedium,
@@ -500,6 +589,37 @@ function Interface.mount(spec)
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
+    rowOrder += 1
+    label(pages.Pets, {
+        Size = UDim2.new(1, -10, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        TextSize = 11,
+        TextWrapped = true,
+        TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = colors.muted,
+        LayoutOrder = rowOrder,
+        Text = "Eggs spend in-game currency. Open Inventory first: conversion requires loaded, unlocked inventory slots. Choose an exact species; only 6 matching eligible pets are sent. The server decides conversion chances; current event support needs testing.",
+    })
+    actionButton("Pets", "Load pet tools", "PrepareCare")
+    input("Pets", "Egg name", "EggName")
+    actionButton("Pets", "Next egg", "NextEgg")
+    cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
+    input("Pets", "Hatch interval (seconds)", "HatchInterval", 1, 30)
+    actionButton("Pets", "Open egg once", "HatchOnce")
+    toggle("Pets", "Auto hatch", "AutoHatch")
+    actionButton("Pets", "Open egg menu", "OpenEggMenu")
+    input("Pets", "Convert species (exact name / ID)", "ConversionSpecies")
+    actionButton("Pets", "Next conversion species", "NextSpecies")
+    input("Pets", "Conversion interval (seconds)", "ConversionInterval", 2, 30)
+    actionButton("Pets", "Convert 6 to gold", "GoldOnce")
+    toggle("Pets", "Auto gold (6 normal pets)", "AutoGold")
+    actionButton("Pets", "Open gold menu", "OpenGoldMenu")
+    actionButton("Pets", "Convert 6 gold to rainbow", "RainbowOnce")
+    toggle("Pets", "Auto rainbow (6 gold pets)", "AutoRainbow")
+    actionButton("Pets", "Open rainbow menu", "OpenRainbowMenu")
+    actionButton("Pets", "Open inventory", "OpenInventory")
+    actionButton("Pets", "STOP ALL", "StopAll", true)
+
     toggle("Misc", "Custom movement", "MovementEnabled")
     input("Misc", "Walk speed", "WalkSpeed", 8, 100)
     input("Misc", "Jump power", "JumpPower", 0, 150)
@@ -520,18 +640,23 @@ function Interface.mount(spec)
     })
     table.insert(renderers, function()
         details.Text = string.format(
-            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
+            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
             tostring(snapshot.Status or "Ready"),
             tostring(snapshot.Target or "None"),
             tostring(snapshot.EquippedPets or 0),
             tostring(snapshot.Farmed or 0),
             tostring(snapshot.CollectedOrbs or 0),
             tostring(snapshot.CollectedLootbags or 0),
+            tostring(snapshot.CareStatus or "Pet tools not loaded"),
+            tostring(snapshot.HatchRequests or 0),
+            tostring(snapshot.GoldRequests or 0),
+            tostring(snapshot.RainbowRequests or 0),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
         )
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")
+    actionButton("Status", "Clear status error", "ClearError")
     actionButton("Status", "Unload suite and restore settings", "Unload", true)
 
     connect(collapseButton.Activated, function()
@@ -689,6 +814,284 @@ function Jobs:tick()
 end
 
 return Jobs
+end
+end
+
+do
+__factories["PetCare.luau"] = function(__require)
+--!nocheck
+-- Native public-library integration. Legacy signatures are not live-event proof.
+local Config = __require("Config.luau")
+local ConversionPolicy = __require("ConversionPolicy.luau")
+local PetCare = {}
+PetCare.__index = PetCare
+
+local function none()
+    return { AutoHatch = false, AutoGold = false, AutoRainbow = false }
+end
+local function text(value) return type(value) == "string" and value:match("%S") ~= nil end
+local function number(value) return type(value) == "number" and value == value and math.abs(value) < math.huge end
+local function child(parent, name) return parent and parent:FindFirstChild(name) end
+local function samePlace() return game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId end
+
+function PetCare.new()
+    return setmetatable({ Supported = none(), Reason = "Pet tools idle — click Load pet tools.",
+        Report = "Pet tools not loaded.", Counts = { HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
+        _generation = 0, _destroyed = false, _reserved = {}, _menus = {} }, PetCare)
+end
+
+function PetCare:_report()
+    self.Report = "Pet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+        .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
+        .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
+        .. "\nRequests are counted, not confirmed hatches or conversion rewards."
+end
+
+function PetCare:_occupied()
+    if self._busy and coroutine.status(self._busy) == "dead" then self._busy = nil end
+    return self._busy ~= nil
+end
+
+function PetCare:Connect(active)
+    if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
+    if active and not active() then return self end
+    self._generation += 1
+    local generation = self._generation
+    local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
+    self.Supported, self._api = none(), nil
+    local ok, message = pcall(function()
+        if self._destroyed then error("Pet tools unloaded.", 0) end
+        if not samePlace() then error("Load pet tools inside the Classic Event destination.", 0) end
+        local library = game:GetService("ReplicatedStorage"):FindFirstChild("Library")
+        if not library or not library:IsA("ModuleScript") then error("Public Library ModuleScript is not loaded.", 0) end
+        local loader, loaderName = require, "require"
+        if type(getrenv) == "function" then
+            local available, environment = pcall(getrenv)
+            if available and type(environment) == "table" and type(environment.require) == "function" then
+                loader, loaderName = environment.require, "getrenv().require"
+            end
+        end
+        if not current() then return end
+        local facade = loader(library)
+        if not current() then return end
+        if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+        local network = facade.Network
+        if not current() then return end
+        local invoke = type(network) == "table" and network.Invoke
+        if not current() then return end
+        local save = facade.Save
+        if not current() then return end
+        local getSave = type(save) == "table" and save.Get
+        if not current() then return end
+        local pets = facade.PetCmds
+        if not current() then return end
+        local getEquipped = type(pets) == "table" and pets.GetEquipped
+        if not current() then return end
+        local directory = facade.Directory
+        if not current() then return end
+        local eggDirectory = type(directory) == "table" and directory.Eggs
+        if not current() then return end
+        local petDirectory = type(directory) == "table" and directory.Pets
+        if not current() then return end
+        if type(invoke) ~= "function" or type(getSave) ~= "function" then
+            error("Public Network.Invoke / Save.Get unavailable. No private networking fallback attempted.", 0)
+        end
+        self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
+            eggs = eggDirectory, pets = petDirectory }
+        self._loader = loaderName
+        self.Supported.AutoHatch = type(eggDirectory) == "table"
+        local conversion = type(petDirectory) == "table" and type(getEquipped) == "function"
+        self.Supported.AutoGold, self.Supported.AutoRainbow = conversion, conversion
+        self.Reason = "Pet APIs loaded; no remote probe sent. Server decides access, hatch modes and conversion chances."
+    end)
+    if not current() then return self end
+    if not ok then self.Reason = tostring(message) end
+    self:_report()
+    return self
+end
+
+function PetCare:_run(key, active, work)
+    if active and not active() then return 0 end
+    if self._destroyed or not samePlace() or not self._api or not self.Supported[key] then error(self.Reason, 0) end
+    if self:_occupied() then error("Another pet operation is still returning; no overlapping request sent.", 0) end
+    local generation = self._generation
+    local function current() return not self._destroyed and generation == self._generation and samePlace() and (not active or active()) end
+    local owner = coroutine.running()
+    self._busy = owner
+    local ok, result = pcall(work, current)
+    if self._busy == owner then self._busy = nil end
+    if not current() then return 0 end
+    if not ok then error(result, 0) end
+    return result
+end
+
+function PetCare:_request(key, command, counter, current, ...)
+    if not current() then return 0 end
+    self.Counts[counter] += 1
+    local response = table.pack(pcall(self._api.invoke, command, ...))
+    if not current() then return 0 end
+    if not response[1] or response.n < 2 or response[2] ~= true then
+        self.Supported[key] = false
+        self.Reason = command .. " was rejected or gave no true acknowledgement; feature stopped."
+        if not response[1] then self.Reason ..= " " .. tostring(response[2]) end
+        self:_report()
+        error(self.Reason, 0)
+    end
+    self.Reason = command .. " acknowledged. Request count does not confirm the resulting pets."
+    self:_report()
+    return 1
+end
+
+function PetCare:Hatch(eggName, mode, active)
+    return self:_run("AutoHatch", active, function(current)
+        if not text(eggName) then error("Enter an exact egg directory name first.", 0) end
+        local count = if mode == "Single" then 1 elseif mode == "Triple" then 3 elseif mode == "Octuple" then 8 else nil
+        if not count then error("Choose Single, Triple or Octuple hatch mode.", 0) end
+        local egg = self._api.eggs[eggName]
+        if not current() then return 0 end
+        if type(egg) ~= "table" or egg.hatchable ~= true or egg.disabled or egg.isPremium
+            or not text(egg.currency) or egg.currency:lower() == "robux" or not number(egg.cost) or egg.cost <= 0 then
+            error("Unknown, unavailable or premium egg. Select a hatchable in-game currency egg.", 0)
+        end
+        local save = self._api.getSave()
+        if not current() then return 0 end
+        if type(save) ~= "table" or not number(save[egg.currency]) or save[egg.currency] < egg.cost * count then
+            error("Insufficient or unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
+        end
+        return self:_request("AutoHatch", "Buy Egg", "HatchRequests", current, eggName, mode == "Triple", mode == "Octuple")
+    end)
+end
+
+local function speciesId(directory, selected)
+    if not text(selected) then error("Choose one conversion species by exact name or ID first.", 0) end
+    if type(directory[selected]) == "table" then return selected, directory[selected] end
+    local numeric = tonumber(selected)
+    if numeric and type(directory[numeric]) == "table" then return tostring(numeric), directory[numeric] end
+    local found
+    for id, definition in pairs(directory) do
+        if type(definition) == "table" and type(definition.name) == "string" and definition.name:lower() == selected:lower() then
+            if found then error("Species name is ambiguous; enter its exact directory ID.", 0) end
+            found = tostring(id)
+        end
+    end
+    if not found then error("No pet directory entry matches this species.", 0) end
+    return found, directory[found] or directory[tonumber(found)]
+end
+
+function PetCare:NextChoice(kind, previous)
+    if self._destroyed or not samePlace() or not self._api then error("Load pet tools first.", 0) end
+    local choices = {}
+    local directory = if kind == "Egg" then self._api.eggs elseif kind == "Species" then self._api.pets else nil
+    if type(directory) ~= "table" then error("This directory is unavailable.", 0) end
+    for id, definition in pairs(directory) do
+        if type(definition) ~= "table" then continue end
+        local eligible
+        if kind == "Egg" then
+            eligible = definition.hatchable == true and not definition.disabled and not definition.isPremium
+                and text(definition.currency) and definition.currency:lower() ~= "robux" and number(definition.cost) and definition.cost > 0
+        else
+            eligible = text(definition.rarity) and not definition.isPremium and not definition.huge and not definition.titanic
+                and definition.rarity ~= "Exclusive" and definition.rarity ~= "Event"
+        end
+        if eligible and (text(id) or number(id)) then
+            table.insert(choices, { value = tostring(id), label = if kind == "Species" and text(definition.name)
+                then definition.name .. " (" .. tostring(id) .. ")" else tostring(id) })
+        end
+    end
+    table.sort(choices, function(a, b) return a.value < b.value end)
+    if #choices == 0 then error("No eligible entries are loaded in this directory.", 0) end
+    local index = 0
+    for i, choice in ipairs(choices) do if choice.value == previous then index = i; break end end
+    local nextChoice = choices[index % #choices + 1]
+    return nextChoice.value, nextChoice.label
+end
+
+local function unlockedSlot(playerGui, uid)
+    local slots = child(child(child(child(playerGui, "Inventory"), "Frame"), "Main"), "Pets")
+    local normal = child(slots, "Normal")
+    local slot = child(normal, uid)
+    local locked = child(slot, "Locked")
+    if not slot or not slot:IsA("TextButton") or not locked or locked.Visible ~= false then return false end
+    local favorite = child(slot, "Favorite") or child(slot, "Favourite")
+    return not favorite or favorite.Visible == false
+end
+
+function PetCare:Convert(variant, selected, active)
+    local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
+    if not key then error("Choose Gold or Rainbow conversion.", 0) end
+    return self:_run(key, active, function(current)
+        local id, definition = speciesId(self._api.pets, selected)
+        if not current() then return 0 end
+        if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
+        local premium = definition.isPremium or definition.huge or definition.titanic
+            or definition.rarity == "Exclusive" or definition.rarity == "Event"
+        local save = self._api.getSave()
+        if not current() then return 0 end
+        if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+        local equipped = self._api.getEquipped()
+        if not current() then return 0 end
+        if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
+        local worn = {}
+        for _, pet in pairs(equipped) do
+            if type(pet) ~= "table" or not text(pet.uid) then error("Unknown equipped-pet schema.", 0) end
+            worn[pet.uid] = true
+        end
+        local normalized, present = {}, {}
+        local player = game:GetService("Players").LocalPlayer
+        local gui = player and player:FindFirstChild("PlayerGui")
+        for _, pet in pairs(save.Pets) do
+            if type(pet) ~= "table" or not text(pet.uid) or (type(pet.id) ~= "string" and type(pet.id) ~= "number") then
+                error("Unknown inventory pet schema; no conversion sent.", 0)
+            end
+            present[pet.uid] = true
+            local protected = premium or self._reserved[pet.uid] or false
+            for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "lk", "locked", "favorite", "fav" }) do
+                if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
+            end
+            protected = protected or pet.dm or pet.hc or pet.sh or pet.lk or pet.locked or pet.favorite or pet.fav
+                or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
+            local unlocked = unlockedSlot(gui, pet.uid)
+            table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),
+                variant = if pet.r then "Rainbow" elseif pet.g then "Gold" else "Normal",
+                protected = protected == true, equipped = worn[pet.uid] == true,
+                eligible = tostring(pet.id) == id and unlocked and not protected })
+        end
+        if not current() then return 0 end
+        for uid in pairs(self._reserved) do if not present[uid] then self._reserved[uid] = nil end end
+        local batch, reason = ConversionPolicy.NextBatch(normalized, variant)
+        if not batch then
+            self.Reason = (reason or "No eligible batch.") .. " Open Inventory to load lock indicators; select one species."
+            self:_report()
+            return 0
+        end
+        if not current() then return 0 end
+        -- Reserve before the request: an uncertain/late reply must never replay UIDs.
+        for _, uid in ipairs(batch) do self._reserved[uid] = true end
+        return self:_request(key, if variant == "Gold" then "Use Golden Machine" else "Use Rainbow Machine",
+            if variant == "Gold" then "GoldRequests" else "RainbowRequests", current, batch)
+    end)
+end
+
+function PetCare:OpenMenu(kind)
+    if self._destroyed then error("Pet tools unloaded.", 0) end
+    local names = { Gold = "Golden", Rainbow = "Rainbow", Inventory = "Inventory", Egg = "Eggs" }
+    local player = game:GetService("Players").LocalPlayer
+    local gui = player and player:FindFirstChild("PlayerGui")
+    local menu = names[kind] and child(gui, names[kind])
+    if not menu or not menu:IsA("ScreenGui") then error("That native game menu is not loaded. Open it normally once, then retry.", 0) end
+    if self._menus[menu] == nil then self._menus[menu] = menu.Enabled end
+    menu.Enabled = true
+    return true
+end
+
+function PetCare:Destroy()
+    self._generation += 1
+    self._destroyed, self._api, self.Supported = true, nil, none()
+    for menu, enabled in pairs(self._menus) do if menu.Parent then pcall(function() menu.Enabled = enabled end) end end
+    table.clear(self._menus)
+end
+
+return PetCare
 end
 end
 
@@ -1185,6 +1588,8 @@ local numeric = {
     FarmInterval = { 0.25, 10 },
     WalkSpeed = { 8, 100 },
     JumpPower = { 0, 150 },
+    HatchInterval = { 1, 30 },
+    ConversionInterval = { 2, 30 },
 }
 local booleans = {
     AutoFarm = true,
@@ -1194,6 +1599,9 @@ local booleans = {
     MovementEnabled = true,
     Fullbright = true,
     AntiIdle = true,
+    AutoHatch = true,
+    AutoGold = true,
+    AutoRainbow = true,
 }
 
 function Policy.option(key: string, value: any): (any, string?)
@@ -1217,7 +1625,11 @@ function Policy.option(key: string, value: any): (any, string?)
         end
         return nil, "Unknown farm mode."
     end
-    if key == "Area" or key == "NameFilter" then
+    if key == "HatchMode" then
+        if value == "Single" or value == "Triple" or value == "Octuple" then return value, nil end
+        return nil, "Choose Single, Triple or Octuple."
+    end
+    if key == "Area" or key == "NameFilter" or key == "EggName" or key == "ConversionSpecies" then
         if type(value) ~= "string" then
             return nil, "Expected text."
         end
@@ -1273,6 +1685,7 @@ local Policy = __require("Policy.luau")
 local Jobs = __require("Jobs.luau")
 local Interface = __require("Interface.luau")
 local PetSim99 = __require("PetSim99.luau")
+local PetCare = __require("PetCare.luau")
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -1282,10 +1695,11 @@ Runtime.__index = Runtime
 function Runtime.new(player, parent)
     local self = setmetatable({
         Player = player, Alive = true, Connections = {}, Jobs = Jobs.new(),
-        Options = table.clone(Config.Options), Adapter = PetSim99.new(),
+        Options = table.clone(Config.Options), Adapter = PetSim99.new(), Care = PetCare.new(),
         Ready = false, Failures = {}, NextAt = {},
         State = { Status = "Idle — run the compatibility check manually", Target = "None", EquippedPets = 0,
-            Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "" },
+            Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "",
+            CareStatus = "Pet tools idle — click Load pet tools", HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
     }, Runtime)
     self.Ui = Interface.mount({
         parent = parent, name = Config.Name, version = Config.Version, options = self.Options,
@@ -1294,6 +1708,7 @@ function Runtime.new(player, parent)
     })
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
+        self.Jobs:cancel("care")
         self:StopNavigation()
         self.LastAssignment = nil
         self.NextAt = {}
@@ -1382,7 +1797,72 @@ function Runtime:FeatureResult(key, ok, result)
     self:Publish()
 end
 
+function Runtime:PrepareCare()
+    for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
+    self.Jobs:cancel("care")
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:Connect(activeJob)
+    end, function(ok, result)
+        self.State.CareStatus = if ok then self.Care.Reason else "Pet tools failed to load"
+        self.State.LastError = if ok then "" else tostring(result)
+        self:Publish()
+    end)
+    if not started then return false, "A previous pet operation is still returning; no new request sent." end
+    self:Publish()
+    return true
+end
+
+function Runtime:StartCare(key, manual)
+    if not self.Alive then return false, "Suite unloaded." end
+    if not self.Care.Supported[key] then return false, self.Care.Reason end
+    local character = self.Player.Character
+    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        local function current()
+            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+                and (manual or self.Options[key])
+        end
+        if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
+        return self.Care:Convert(if key == "AutoGold" then "Gold" else "Rainbow", species, current)
+    end, function(ok, result)
+        self.State.CareStatus = self.Care.Reason
+        if not ok then
+            self.Options[key] = false
+            self.State.LastError = key .. ": " .. tostring(result)
+            self.State.CareStatus = "Pet operation stopped — see error"
+        end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping request sent." end
+    return true
+end
+
+function Runtime:StepCare()
+    if not self.Alive then return end
+    local now = os.clock()
+    local features = { "AutoRainbow", "AutoGold", "AutoHatch" }
+    local cursor = self.CareCursor or 1
+    for offset = 0, #features - 1 do
+        local index = (cursor + offset - 1) % #features + 1
+        local key = features[index]
+        if self.Options[key] and not self.Jobs:busy("care") and now >= (self.NextAt[key] or 0) then
+            local interval = if key == "AutoHatch" then self.Options.HatchInterval else self.Options.ConversionInterval
+            self.NextAt[key] = now + interval
+            local started, reason = self:StartCare(key, false)
+            if not started then
+                self.Options[key] = false
+                self.State.LastError = reason
+                self:Publish()
+            end
+            self.CareCursor = index % #features + 1
+            return
+        end
+    end
+end
+
 function Runtime:Step()
+    self:StepCare()
     if not self.Ready then return end
     local now = os.clock()
     local character = self.Player.Character
@@ -1472,10 +1952,12 @@ function Runtime:Publish()
     if not self.Alive then return end
     self.State.Options = table.clone(self.Options)
     self.State.Supported = table.clone(self.Adapter.Supported)
+    for key, supported in pairs(self.Care.Supported) do self.State.Supported[key] = supported end
+    for field, count in pairs(self.Care.Counts) do self.State[field] = count end
     self.State.Supported.AntiIdle = not self.AntiIdleUnavailable
     self.State.Capabilities = self.Adapter.Reason
         .. "\nNative Roblox UI; no external UI loader or hooks required."
-        .. "\nIdle input and clipboard are tested only when used."
+        .. "\nIdle input and clipboard are tested only when used.\n" .. self.Care.Reason
     self.Ui:Update(self.State)
 end
 
@@ -1534,6 +2016,7 @@ function Runtime:SetOption(key, value)
     if parsed == true and self.Adapter.Supported[key] == false then
         return false, self.Adapter.Reason
     end
+    if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
@@ -1542,11 +2025,15 @@ function Runtime:SetOption(key, value)
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
+            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then self.Jobs:cancel("care") end
             if key == "AutoFarm" or key == "WalkToTarget" then self:StopNavigation() end
         else
             self.Failures[key] = 0
             self.NextAt[key] = 0
         end
+    end
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" then
+        self.Jobs:cancel("care")
     end
     if key == "AutoFarm" or key == "FarmMode" or key == "Area" or key == "NameFilter" or key == "Radius" then
         self.Jobs:cancel("AutoFarm")
@@ -1592,6 +2079,7 @@ function Runtime:StopAll()
     self:RestoreMovement()
     self:SetLighting(false)
     self.State.Status = "Stopped — all automation disabled"
+    self.State.CareStatus = "Pet automation stopped"
     self:Publish()
 end
 
@@ -1622,6 +2110,7 @@ function Runtime:Diagnostics()
         Config.Name .. " v" .. Config.Version,
         "Startup makes no game-module or network probe. The compatibility check is manual.",
         self.Adapter.Report,
+        self.Care.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
         "Last error: " .. tostring(self.State.LastError),
         "Counters represent requests, not confirmed rewards. No credentials or inventory transfer is performed.",
@@ -1631,6 +2120,22 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "NextEgg" or action == "NextSpecies" then
+        local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
+        local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])
+        local accepted, reason = self:SetOption(key, value)
+        if not accepted then return false, reason end
+        self.State.CareStatus = "Selected " .. caption
+        self:Publish()
+    elseif action == "HatchOnce" then return self:StartCare("AutoHatch", true)
+    elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
+    elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
+    elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")
+    elseif action == "OpenGoldMenu" then return self.Care:OpenMenu("Gold")
+    elseif action == "OpenRainbowMenu" then return self.Care:OpenMenu("Rainbow")
+    elseif action == "OpenInventory" then return self.Care:OpenMenu("Inventory")
+    elseif action == "ClearError" then self.State.LastError = ""; self:Publish()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)
     elseif action == "Unload" then self:Destroy()
     elseif action == "Rejoin" then
@@ -1661,6 +2166,7 @@ function Runtime:Destroy()
     if self.Pulse then pcall(task.cancel, self.Pulse) end
     for _, connection in ipairs(self.Connections) do connection:Disconnect() end
     self.Adapter:Destroy()
+    self.Care:Destroy()
     self.Ui:Destroy()
     if self.OnDestroy then self.OnDestroy() end
 end
@@ -1682,16 +2188,19 @@ assert(parent, "PlayerGui was not available within 15 seconds.")
 
 -- BindableEvent works in both Studio and executor environments, without getgenv.
 -- A repeated run tells the prior session to restore changes before replacing it.
-local markerName = "PetSimAutomationSession"
-local previous = parent:FindFirstChild(markerName)
-if previous then
-    if not previous:IsA("BindableEvent") then
-        error("A conflicting session marker already exists; unload it first.")
+local markerName = "PetSim99AutomationSuiteSession"
+-- Recognize older releases so renaming never leaves two suites running.
+for _, name in ipairs({ markerName, "PetSimAutomationSession" }) do
+    local previous = parent:FindFirstChild(name)
+    if previous then
+        if not previous:IsA("BindableEvent") then
+            error("A conflicting session marker already exists; unload it first.")
+        end
+        previous:Fire()
+        local deadline = os.clock() + 3
+        while previous.Parent and os.clock() < deadline do task.wait() end
+        assert(not previous.Parent, "Previous suite did not unload; remove its session before retrying.")
     end
-    previous:Fire()
-    local deadline = os.clock() + 3
-    while previous.Parent and os.clock() < deadline do task.wait() end
-    assert(not previous.Parent, "Previous suite did not unload; remove its session before retrying.")
 end
 local marker = Instance.new("BindableEvent")
 marker.Name = markerName

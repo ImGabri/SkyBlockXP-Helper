@@ -9,16 +9,19 @@ assert(parent, "PlayerGui was not available within 15 seconds.")
 
 -- BindableEvent works in both Studio and executor environments, without getgenv.
 -- A repeated run tells the prior session to restore changes before replacing it.
-local markerName = "PetSimAutomationSession"
-local previous = parent:FindFirstChild(markerName)
-if previous then
-    if not previous:IsA("BindableEvent") then
-        error("A conflicting session marker already exists; unload it first.")
+local markerName = "PetSim99AutomationSuiteSession"
+-- Recognize older releases so renaming never leaves two suites running.
+for _, name in ipairs({ markerName, "PetSimAutomationSession" }) do
+    local previous = parent:FindFirstChild(name)
+    if previous then
+        if not previous:IsA("BindableEvent") then
+            error("A conflicting session marker already exists; unload it first.")
+        end
+        previous:Fire()
+        local deadline = os.clock() + 3
+        while previous.Parent and os.clock() < deadline do task.wait() end
+        assert(not previous.Parent, "Previous suite did not unload; remove its session before retrying.")
     end
-    previous:Fire()
-    local deadline = os.clock() + 3
-    while previous.Parent and os.clock() < deadline do task.wait() end
-    assert(not previous.Parent, "Previous suite did not unload; remove its session before retrying.")
 end
 local marker = Instance.new("BindableEvent")
 marker.Name = markerName

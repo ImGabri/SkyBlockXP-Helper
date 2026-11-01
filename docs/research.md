@@ -201,3 +201,46 @@ empty proxy enumeration and cancellation/reconnect isolation, including a lazy
 getter that reenters Connect. **No v0.5 live result exists yet.** The last executed
 target check remains the failed v0.4 direct-client-module route. Hatching from
 anywhere and conversions still lack a verified current integration.
+
+## v0.6 egg, conversion and native-menu candidates
+
+The requested handlers are now implemented as an independent PetCare integration,
+using the public Library loader, without making Get Coins a prerequisite. The
+following pinned legacy interface facts were checked; no third-party source was
+executed or copied:
+
+- [Hylician293](https://github.com/Hylician/Pet-Simulator-X/blob/de93a64312ff41a05b0c69b1afe04099f8ab356b/source#L293)
+  and [Cypaex1206](https://github.com/Cypaex/Pet-Simulator-X-Autofarm/blob/3f715a0351d68df9af454a2cdadfaf3ec01bef99/Engine#L1206)
+  call Buy Egg with egg name, triple boolean and octuple boolean.
+- [GPSX1102/1143](https://github.com/gavinnn101/gpsx/blob/e70ba0427975092bea20f9a7d5eb0f8d0bf3613a/GPSX%20Hub/util.lua#L1102)
+  and Hylician350/405 document Use Golden Machine / Use Rainbow Machine with
+  UID arrays. Save.Get().Pets provides id/uid and optional g/r/dm variants.
+- [Gavin1635/1691](https://github.com/gavinnn101/RobloxExploitScripts/blob/1a9e0192e14851c032b58c3c6460d80313a5f500/PetSimulatorXArchive/PetSimX.lua#L1635)
+  labels six pets100%. This is historical evidence, not the current chance table.
+- [Gavin2041 onward](https://github.com/gavinnn101/RobloxExploitScripts/blob/1a9e0192e14851c032b58c3c6460d80313a5f500/PetSimulatorXArchive/PetSimX.lua#L2041)
+  enables existing Golden/Rainbow ScreenGuis. Inventory is also directly used in
+  that source. No general GUI.Open method was established. An Eggs ScreenGui is
+  a runtime candidate only; missing native menus are reported rather than created.
+- [FuzeHub127](https://github.com/Subashians/FuzeHub/blob/609f192f866050dcc66d1d3bb8433e3418cf3ee2/sausage.lua#L127)
+  identifies UID-named inventory TextButtons and Locked.Visible. Our adapter only
+  reads that state and requires an unlocked loaded slot; it never unlocks a pet.
+  That reference contains unrelated hooks/actions which were not incorporated.
+- [Meow2555](https://github.com/O0OOOO0O000O/Scripts-1/blob/4ecfd6164a95b79349ae6067009c0958004203b2/Project_Meow_Source.lua#L2555)
+  checks the optional hc flag. No reliable full current-event raw-save
+  lock/favorite/shiny contract was established. Optional recognized flags are
+  excluded defensively; absent flags alone do not establish unlocked state.
+
+The new original implementation fixes six-pet Normal→Gold and Gold→Rainbow
+selection, excludes equipped/duplicate/premium pets, requires an explicit species,
+and reserves submitted UIDs until they leave the replicated inventory. Native
+server access, range, costs, current schema and chance remain unverified. A true
+remote reply is treated as acknowledgement, not proof of a resulting pet/reward;
+an unknown or rejected reply stops the feature without retrying it automatically.
+All mutations share one cancellable job; round-robin selection prevents a slow
+stage starving the other enabled stages.
+
+Authenticated GitHub code search for the exact current event ID found only the
+already-known PS99 example excluding that place. No readable current-event source
+established compatibility. Official updates99/100 confirm the event and eggs but
+do not publish this scripting contract or machine chance table. Fandom machine
+pages returnedHTTP402; no current chance guarantee was inferred.

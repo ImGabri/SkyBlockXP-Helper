@@ -5,6 +5,7 @@ python3 scripts/build.py --check
 python3 -m unittest discover -s tests -p 'test_*.py' -v
 .tools/bin/luau tests/policy.luau
 .tools/bin/luau tests/jobs.luau
+.tools/bin/luau tests/conversion_policy.luau
 python3 - <<'PY'
 from pathlib import Path
 import subprocess
