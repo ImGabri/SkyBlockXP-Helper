@@ -148,6 +148,36 @@ end
 function adapter:Destroy() self.Destroyed = true end
 local AdapterStub = { new = function() return adapter end }
 
+local careHook
+local care = { Supported = { AutoHatch = false, AutoGold = false, AutoRainbow = false },
+    Reason = "Pet tools idle", Report = "Care fixture", ConnectCalls = 0, HatchCalls = 0,
+    ConvertCalls = 0, MenuCalls = 0, Counts = { HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 } }
+function care:Connect(active)
+    self.ConnectCalls += 1
+    if careHook then careHook("Connect", active) end
+    if not active or active() then self.Supported = { AutoHatch = true, AutoGold = true, AutoRainbow = true } end
+    return self
+end
+function care:Hatch(egg, mode, active)
+    self.HatchCalls += 1
+    if careHook then careHook("Hatch", active) end
+    if active and not active() then return 0 end
+    self.LastEgg, self.LastMode = egg, mode
+    self.Counts.HatchRequests += 1
+    return 1
+end
+function care:Convert(variant, species, active)
+    self.ConvertCalls += 1
+    if careHook then careHook("Convert", active) end
+    if active and not active() then return 0 end
+    self.LastVariant, self.LastSpecies = variant, species
+    self.Counts[variant .. "Requests"] += 1
+    return 1
+end
+function care:OpenMenu(kind) self.MenuCalls += 1; self.LastMenu = kind; return true end
+function care:Destroy() self.Destroyed = true end
+local CareStub = { new = function() return care end }
+
 local function contains(text, expected)
     assert(string.find(text, expected, 1, true), "Missing text '" .. expected .. "' in '" .. text .. "'")
 end
@@ -167,6 +197,7 @@ class RuntimeTests(unittest.TestCase):
                 shutil.copyfile(ROOT / "src/client" / name, sources / name)
             (sources / "Interface.luau").write_text("return InterfaceStub\n", encoding="utf-8")
             (sources / "PetSim99.luau").write_text("return AdapterStub\n", encoding="utf-8")
+            (sources / "PetCare.luau").write_text("return CareStub\n", encoding="utf-8")
             (sources / "init.client.luau").write_text(
                 'local Runtime = require(script.Runtime)\n'
                 'local Config = require(script.Config)\n'
@@ -189,6 +220,63 @@ local status = string.lower(ui.State.Status)
 assert(string.find(status, "idle", 1, true) or string.find(status, "connect", 1, true), "startup status does not describe manual connection")
 assert(runtime:Action("Reconnect"))
 assert(adapter.ConnectCalls == 1 and adapter.NativeCalls == 1 and runtime.Ready)
+runtime:Destroy()
+''')
+
+    def test_pet_tools_are_independent_of_the_coin_probe_and_start_disabled(self):
+        self.run_case('''
+assert(care.ConnectCalls == 0, "startup loaded pet game modules")
+assert(not runtime.Options.AutoHatch and not runtime.Options.AutoGold and not runtime.Options.AutoRainbow)
+assert(runtime:Action("PrepareCare"))
+assert(care.ConnectCalls == 1 and not runtime.Ready)
+assert(runtime:SetOption("EggName", "Starter Egg"))
+assert(runtime:SetOption("AutoHatch", true))
+runtime:Step()
+assert(care.HatchCalls == 1 and care.LastEgg == "Starter Egg")
+assert(ui.State.HatchRequests == 1)
+runtime:Destroy()
+assert(care.Destroyed)
+''')
+
+    def test_manual_pet_actions_dispatch_without_enabling_automatic_modes(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+assert(runtime:SetOption("EggName", "Starter Egg"))
+assert(runtime:SetOption("HatchMode", "Triple"))
+assert(runtime:SetOption("ConversionSpecies", "Cat"))
+assert(runtime:Action("HatchOnce"))
+assert(care.LastMode == "Triple")
+assert(runtime:Action("GoldOnce") and care.LastVariant == "Gold")
+assert(runtime:Action("RainbowOnce") and care.LastVariant == "Rainbow")
+assert(care.LastSpecies == "Cat" and care.HatchCalls == 1 and care.ConvertCalls == 2)
+assert(not runtime.Options.AutoHatch and not runtime.Options.AutoGold and not runtime.Options.AutoRainbow)
+assert(runtime:Action("OpenGoldMenu") and care.LastMenu == "Gold")
+assert(runtime:Action("OpenRainbowMenu") and care.LastMenu == "Rainbow")
+assert(runtime:Action("OpenEggMenu") and care.LastMenu == "Egg")
+assert(runtime:Action("OpenInventory") and care.LastMenu == "Inventory")
+runtime.State.LastError = "old error"
+assert(runtime:Action("ClearError") and runtime.State.LastError == "")
+runtime:Destroy()
+''')
+
+    def test_stop_all_cancels_pending_pet_mutation_without_replaying_or_overlapping(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+nativeCancelThrows = true
+careHook = function(kind, active)
+    if kind == "Hatch" then coroutine.yield("pending hatch") end
+end
+runtime:SetOption("AutoHatch", true)
+runtime:Step()
+assert(care.HatchCalls == 1)
+local pending = spawned[#spawned]
+runtime:StopAll()
+runtime:SetOption("AutoHatch", true)
+runtime:Step()
+assert(care.HatchCalls == 1, "pending care request overlapped")
+assert(coroutine.resume(pending))
+assert(care.Counts.HatchRequests == 0, "canceled hatch published a late result")
 runtime:Destroy()
 ''')
 
