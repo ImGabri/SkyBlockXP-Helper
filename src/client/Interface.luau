@@ -30,6 +30,7 @@ local defaults = {
     AutoHatch = false,
     ConversionSpecies = "",
     ConversionInterval = 3,
+    MachineTravelMode = "Walk",
     AutoGold = false,
     AutoRainbow = false,
     MovementEnabled = false,
@@ -477,7 +478,7 @@ function Interface.mount(spec)
         TextYAlignment = Enum.TextYAlignment.Top,
         TextColor3 = colors.muted,
         LayoutOrder = rowOrder,
-        Text = "Eggs spend in-game currency. Open Inventory first: conversion requires loaded, unlocked inventory slots. Choose an exact species; only 6 matching eligible pets are sent. The server decides conversion chances; current event support needs testing.",
+        Text = "Eggs spend in-game currency. Open Inventory first; only 6 matching, eligible, unlocked pets are used. Walk mode approaches the loaded machine before converting. Off requires you to stand near it yourself. The server decides access and chances.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
     input("Pets", "Egg name", "EggName")
@@ -490,6 +491,9 @@ function Interface.mount(spec)
     input("Pets", "Convert species (exact name / ID)", "ConversionSpecies")
     actionButton("Pets", "Next conversion species", "NextSpecies")
     input("Pets", "Conversion interval (seconds)", "ConversionInterval", 2, 30)
+    cycle("Pets", "Machine travel", "MachineTravelMode", { "Walk", "Off" })
+    actionButton("Pets", "Go to gold machine", "GoGoldMachine")
+    actionButton("Pets", "Go to rainbow machine", "GoRainbowMachine")
     actionButton("Pets", "Convert 6 to gold", "GoldOnce")
     toggle("Pets", "Auto gold (6 normal pets)", "AutoGold")
     actionButton("Pets", "Open gold menu", "OpenGoldMenu")
