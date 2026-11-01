@@ -250,6 +250,32 @@ assert(care:Hatch("Starter Egg", "Single", function() return live end) == 0)
 assert(#calls == 0)
 ''')
 
+    def test_loading_report_identifies_loader_before_native_require_returns(self):
+        self.run_case('''
+local native = require
+require = function(module) coroutine.yield("module initializing"); return native(module) end
+local worker = coroutine.create(function() care:Connect() end)
+assert(coroutine.resume(worker))
+contains(care.Report, "Pet-tool loader: require")
+contains(care.Report, "Loading pet API facade")
+assert(#calls == 0)
+assert(coroutine.close(worker))
+''')
+
+    def test_loading_report_names_a_suspended_lazy_save_export(self):
+        self.run_case('''
+local saveApi = facade.Save
+facade.Save = nil
+setmetatable(facade, { __index = function(_, key)
+    if key == "Save" then coroutine.yield("Save initializing"); return saveApi end
+end })
+local worker = coroutine.create(function() care:Connect() end)
+assert(coroutine.resume(worker))
+contains(care.Report, "Library.Save")
+assert(#calls == 0)
+assert(coroutine.close(worker))
+''')
+
     def test_native_cancellation_releases_busy_owner_after_thread_is_closed(self):
         self.run_case('''
 facade.Save.Get = function() coroutine.yield("native read"); return save end
