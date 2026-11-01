@@ -12,6 +12,11 @@ adapter_tests = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(adapter_tests)
 builder = adapter_tests.builder
 FIXTURE = adapter_tests.FIXTURE + r'''
+local boundaryTypeof = typeof
+local function typeof(value)
+    if type(value) == "table" and value.ClassName then return "Instance" end
+    return boundaryTypeof(value)
+end
 library.ClassName = "ModuleScript"
 local inventory = {}
 for i = 1, 12 do inventory[i] = { uid = "normal-" .. i, id = "cat" } end
@@ -25,6 +30,15 @@ local facade = {
     Network = network, PetCmds = exports[petsModule], Directory = directory,
     Save = { Get = function() return save end },
 }
+local eggModel = instance("Starter Egg Model", "Model", workspace)
+eggModel.Attributes.ID = "Starter Egg"
+part("Center", Vector3.new(20, 0, 0), eggModel)
+function eggModel:IsDescendantOf(parent)
+    local node = self.Parent
+    while node do if node == parent then return true end; node = node.Parent end
+    return false
+end
+facade.WorldCmds = { GetAllEggs = function() return { eggModel } end }
 exports[library] = facade
 local careResponse = true
 local careHook
@@ -114,12 +128,75 @@ assert(#calls == 1)
 ''')
 
     def test_unknown_premium_unaffordable_eggs_and_invalid_modes_send_nothing(self):
-        for change, egg, mode in [('', 'Unknown', 'Single'), ('directory.Eggs["Starter Egg"].currency = "Robux"', 'Starter Egg', 'Single'), ('save.Coins = 0', 'Starter Egg', 'Single'), ('', 'Starter Egg', 'Ten')]:
+        for change, egg, mode in [('', 'Unknown', 'Single'), ('directory.Eggs["Starter Egg"].currency = "Robux"', 'Starter Egg', 'Single'), ('', 'Starter Egg', 'Ten')]:
             with self.subTest(change=change, egg=egg, mode=mode):
                 self.run_case(change + f'''
 care:Connect()
 assert(not pcall(care.Hatch, care, "{egg}", "{mode}"))
 assert(#calls == 0)
+''')
+
+    def test_hatch_readiness_waits_for_currency_without_disabling_or_spending(self):
+        self.run_case('''
+care:Connect()
+assert(type(care.CanHatch) == "function", "hatch readiness missing")
+save.Coins = 0
+assert(not care:CanHatch("Starter Egg", "Single"))
+assert(care:Hatch("Starter Egg", "Single") == 0)
+assert(care.Supported.AutoHatch and #calls == 0)
+contains(care.Reason, "Waiting")
+save.Coins = 1000
+assert(care:CanHatch("Starter Egg", "Triple"))
+assert(care:Hatch("Starter Egg", "Triple") == 1)
+assert(#calls == 1)
+''')
+
+    def test_selected_egg_target_is_a_unique_loaded_model_with_matching_id(self):
+        self.run_case('''
+care:Connect()
+assert(type(care.GetEggTarget) == "function", "egg target resolver missing")
+assert(care:GetEggTarget("Starter Egg") == eggModel)
+assert(#calls == 0)
+eggModel.Attributes.ID = "Other Egg"
+assert(not pcall(care.GetEggTarget, care, "Starter Egg"))
+eggModel.Attributes.ID = "Starter Egg"
+eggModel.Parent = nil
+assert(not pcall(care.GetEggTarget, care, "Starter Egg"))
+assert(#calls == 0)
+''')
+
+    def test_missing_or_canceled_public_egg_list_never_returns_a_target(self):
+        self.run_case('''
+facade.WorldCmds = nil
+care:Connect()
+assert(type(care.GetEggTarget) == "function", "egg target resolver missing")
+assert(not pcall(care.GetEggTarget, care, "Starter Egg"))
+local live = true
+facade.WorldCmds = { GetAllEggs = function() live = false; return { eggModel } end }
+care:Connect()
+assert(care:GetEggTarget("Starter Egg", function() return live end) == nil)
+assert(#calls == 0)
+''')
+
+    def test_duplicate_loaded_egg_ids_are_rejected_without_guessing(self):
+        self.run_case('''
+facade.WorldCmds.GetAllEggs = function() return { eggModel, eggModel } end
+care:Connect()
+assert(type(care.GetEggTarget) == "function", "egg target resolver missing")
+assert(not pcall(care.GetEggTarget, care, "Starter Egg"))
+assert(#calls == 0)
+''')
+
+    def test_suspended_inventory_calls_identify_the_actual_read_stage(self):
+        for source, expected in [('facade.Save.Get', 'Save.Get'), ('exports[petsModule].GetEquipped', 'GetEquipped')]:
+            with self.subTest(source=source):
+                self.run_case(source + ''' = function() coroutine.yield("native read"); return {} end
+care:Connect()
+local worker = coroutine.create(function() care:CanConvert("Gold", "cat") end)
+assert(coroutine.resume(worker))
+contains(care.Report, "''' + expected + '''")
+assert(#calls == 0)
+assert(coroutine.close(worker))
 ''')
 
     def test_gold_and_rainbow_dispatch_six_of_correct_variant_only(self):
