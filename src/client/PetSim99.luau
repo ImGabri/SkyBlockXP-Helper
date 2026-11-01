@@ -151,6 +151,9 @@ function PetSim99:_readSnapshot(probe, active)
     end
     if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     local root = self:_root()
+    if returned.n == 0 then
+        error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
+    end
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
             .. "); expected a coin dictionary or true plus a coin dictionary. A nil/empty reply does not establish compatibility.", 0)
@@ -261,6 +264,7 @@ function PetSim99:Connect(active)
             networkPath = "Library.Network"
         end
         local network = requireModule(networkModule, networkPath)
+        if not current() then return end
         local petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds")
         if not current() then return end
         self._network, self._petCmds = network, petCmds
@@ -341,7 +345,7 @@ function PetSim99:Assign(target, pets, active)
         end
     end)
     self:_report()
-    if not ok and generation == self._generation and not self._destroyed then self:_fail(tostring(message)) end
+    if not ok and current() then self:_fail(tostring(message)) end
     return count
 end
 
@@ -400,7 +404,7 @@ function PetSim99:Collect(kind, radius, active)
         end
     end)
     self:_report()
-    if not ok and generation == self._generation and not self._destroyed then self:_fail(tostring(message)) end
+    if not ok and current() then self:_fail(tostring(message)) end
     return count
 end
 
