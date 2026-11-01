@@ -537,6 +537,37 @@ local snapshot = adapter:Snapshot()
 assert(not snapshot.HealthKnown and not snapshot.Candidates[1].healthKnown)
 ''')
 
+    def test_current_health_field_and_pos_marker_enable_loaded_coin_candidates(self):
+        self.run_case('''
+records.coin1.h, records.coin1.health = 37, nil
+loadedCoin.Children = {}
+instance("Coin", "Model", loadedCoin)
+part("POS", Vector3.new(10,0,0), loadedCoin)
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+local snapshot = adapter:Snapshot()
+assert(snapshot.HealthKnown and #snapshot.Candidates == 1)
+assert(snapshot.Candidates[1].health == 37 and snapshot.Candidates[1].healthKnown)
+''')
+
+    def test_invalid_or_conflicting_current_health_fields_are_rejected(self):
+        for health in ['"37"', '-1', '0/0', 'math.huge', 'true', '31']:
+            with self.subTest(health=health):
+                self.run_case('records.coin1.h = ' + health + '''
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+assert(#calls == 1 and calls[1].command == "Get Coins")
+''')
+
+    def test_matching_dual_health_fields_are_supported_without_changing_legacy(self):
+        self.run_case('''
+records.coin1.h = records.coin1.health
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+local snapshot = adapter:Snapshot()
+assert(snapshot.HealthKnown and snapshot.Candidates[1].health == 30)
+''')
+
     def test_world_area_rejection_blocks_unavailable_loaded_targets(self):
         self.run_case('''
 local worldModule = instance("WorldCmds", "ModuleScript", client)
@@ -561,6 +592,34 @@ for offset, uid in ipairs({"pet-a", "pet-b"}) do
     assert(farm.args.n == 2 and farm.args[1] == "coin1" and farm.args[2] == uid)
 end
 contains(adapter.Report, "2 pet farm dispatches")
+''')
+
+    def test_join_coin_per_pet_dictionary_only_dispatches_explicit_acceptance(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+local snapshot = adapter:Snapshot()
+calls = {}
+invokeHook = function(command, id, uids)
+    if command == "Join Coin" then return { [uids[1]] = uids[1] == "pet-a" } end
+end
+assert(adapter:Assign(snapshot.Candidates[1], snapshot.Pets) == 1)
+assert(#calls == 3 and calls[1].command == "Join Coin" and calls[2].command == "Farm Coin"
+    and calls[2].args[2] == "pet-a" and calls[3].command == "Join Coin")
+''')
+
+    def test_join_coin_missing_false_or_reason_string_never_dispatches_farming(self):
+        for value in ['nil', 'false', '"too far from the coin"']:
+            with self.subTest(value=value):
+                self.run_case('''
+local adapter = PetSim99.new():Connect()
+local snapshot = adapter:Snapshot()
+calls = {}
+invokeHook = function(command, id, uids)
+    if command == "Join Coin" then return { [uids[1]] = ''' + value + ''' } end
+end
+assert(adapter:Assign(snapshot.Candidates[1], snapshot.Pets) == 0)
+assert(#calls == 2 and calls[1].command == "Join Coin" and calls[2].command == "Join Coin")
+contains(adapter.Report, "0 pet farm dispatches")
 ''')
 
     def test_existing_server_assignments_are_not_dispatched_again(self):
@@ -758,6 +817,26 @@ assert(not pcall(adapter.Snapshot, adapter), "old snapshot should be canceled af
 assert(adapter.Supported.AutoFarm, "old reply disabled the newer connection")
 contains(adapter._coinResponse, "returns=1")
 contains(adapter._coinResponse, "types=table")
+''')
+
+    def test_late_coin_reply_cannot_overwrite_new_connection_probe_stage(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+local invoke = network.Invoke
+local oldRequestPending = true
+local newStage
+network.Invoke = function(command, ...)
+    if command == "Get Coins" and oldRequestPending then
+        oldRequestPending = false
+        adapter:Connect()
+        newStage = adapter._phase
+        return nil
+    end
+    return invoke(command, ...)
+end
+assert(not pcall(adapter.Snapshot, adapter))
+assert(newStage == "Probe succeeded; features can be enabled manually")
+assert(adapter._phase == newStage, "late reply overwrote the newer probe stage")
 ''')
 
     def test_late_assignment_failure_cannot_disable_a_new_connection(self):
