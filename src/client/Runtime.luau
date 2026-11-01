@@ -126,6 +126,7 @@ end
 function Runtime:PrepareCare()
     for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
     self.Jobs:cancel("care")
+    self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:Connect(activeJob)
     end, function(ok, result)
@@ -183,6 +184,7 @@ function Runtime:GoToMachine(variant, openMenu)
     self.Jobs:cancel("AutoFarm")
     self:StopNavigation()
     local started = self.Jobs:start("care", Config.TravelTimeout, function(activeJob)
+        self.MachineJourney = activeJob
         local function current()
             return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
         end
@@ -228,7 +230,8 @@ end
 
 function Runtime:Step()
     self:StepCare()
-    if self.Jobs:busy("care") and self.Options.MachineTravelMode == "Walk" then
+    if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
+        or (self.MachineJourney and self.MachineJourney())) then
         self.Jobs:cancel("AutoFarm")
         self:StopNavigation()
         self:Publish()
