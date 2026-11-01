@@ -69,4 +69,39 @@ test("stop all cancels independent feature workers", function()
     for _, fn in ipairs(queued) do assert(cancelled[fn]); fn() end
     assert(not jobs:busy("farm") and not jobs:busy("orbs") and not jobs:busy("lootbags"))
 end)
+test("timeout completion can cancel sibling jobs without crashing tick", function()
+    local jobs, _, _, advance = fixture()
+    local reports = 0
+    for _, key in ipairs({ "farm", "orbs" }) do
+        jobs:start(key, 10, function() end, function(ok)
+            assert(not ok)
+            reports += 1
+            jobs:cancelAll()
+        end)
+    end
+    advance(10)
+    jobs:tick()
+    assert(reports == 1, "a cancelled sibling must not receive timeout completion")
+    assert(not jobs:busy("farm") and not jobs:busy("orbs"))
+end)
+test("stale timeout entries cannot cancel replacement sibling jobs", function()
+    local jobs, _, _, advance = fixture()
+    local reports = 0
+    for _, key in ipairs({ "farm", "orbs" }) do
+        jobs:start(key, 10, function() end, function(ok)
+            assert(not ok)
+            reports += 1
+            jobs:cancelAll()
+            for _, replacement in ipairs({ "farm", "orbs" }) do
+                jobs:start(replacement, 20, function() end, function()
+                    error("a replacement received an expired sibling's timeout")
+                end)
+            end
+        end)
+    end
+    advance(10)
+    jobs:tick()
+    assert(reports == 1, "only the original completed job may report a timeout")
+    assert(jobs:busy("farm") and jobs:busy("orbs"), "replacement workers must remain active")
+end)
 print(string.format("%d tests passed", passed))

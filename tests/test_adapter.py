@@ -146,7 +146,7 @@ class AdapterTests(unittest.TestCase):
             directory = Path(temporary)
             sources = directory / "src"
             sources.mkdir()
-            for name in ["Config.luau", "PetSim99.luau"]:
+            for name in ["Config.luau", "PetSim99.luau", "Jobs.luau"]:
                 shutil.copyfile(ROOT / "src/client" / name, sources / name)
             (sources / "init.client.luau").write_text(
                 'local PetSim99 = require(script.PetSim99)\n' + case + '\nprint("ADAPTER_TEST_OK")\n',
@@ -251,6 +251,21 @@ end
 local adapter = PetSim99.new():Connect()
 assertBlocked(adapter)
 contains(adapter.Reason, "explicitly rejected")
+''')
+
+    def test_coin_dictionary_with_extra_returns_is_rejected(self):
+        for extra in ["false", '"extra"']:
+            with self.subTest(extra=extra):
+                self.run_case('''
+local invoke = network.Invoke
+network.Invoke = function(command, ...)
+    local result = invoke(command, ...)
+    if command == "Get Coins" then return result, ''' + extra + ''' end
+    return result
+end
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+contains(adapter.Reason, "returns=2")
 ''')
 
     def test_empty_malformed_and_wrapped_coin_records_are_rejected(self):
@@ -358,6 +373,56 @@ local running = true
 invokeHook = function(command) if command == "Join Coin" then running = false end end
 assert(adapter:Assign(snapshot.Candidates[1], snapshot.Pets, function() return running end) == 0)
 assert(#calls == 1 and calls[1].command == "Join Coin")
+''')
+
+    def test_timeout_keeps_uncancellable_worker_busy_and_prevents_further_dispatch(self):
+        self.run_case('''
+local Jobs = require(script.Jobs)
+local adapter = PetSim99.new():Connect()
+local snapshot = adapter:Snapshot()
+calls = {}
+local threads, reports = {}, 0
+local jobs = Jobs.new({
+    clock = function() return now end,
+    spawn = function(fn)
+        local thread = coroutine.create(fn)
+        table.insert(threads, thread)
+        return thread
+    end,
+    cancel = function() error("fixture native worker cannot be canceled") end,
+})
+local yielded = false
+invokeHook = function(command)
+    if command == "Join Coin" and not yielded then
+        yielded = true
+        coroutine.yield("pending native request")
+    end
+end
+assert(jobs:start("farm", 1, function(activeJob)
+    -- The fallback makes the old implementation fail because of stale work,
+    -- rather than a fixture error from its missing cooperative token argument.
+    activeJob = activeJob or function() return true end
+    return adapter:Assign(snapshot.Candidates[1], snapshot.Pets, activeJob)
+end, function(ok)
+    assert(not ok, "only the timeout should publish a result")
+    reports += 1
+end))
+assert(coroutine.resume(threads[1]))
+assert(#calls == 1 and calls[1].command == "Join Coin")
+now += 2
+jobs:tick()
+assert(reports == 1, "timeout should report exactly once")
+assert(jobs:busy("farm"), "failed cancellation freed a still-running worker slot")
+assert(not jobs:start("farm", 1, function() error("overlapping worker") end, function() end),
+    "replacement worker overlapped an uncancellable native request")
+local ok, message = coroutine.resume(threads[1])
+assert(ok, message)
+assert(#calls == 1, "timed-out worker sent Farm Coin or a subsequent Join Coin")
+assert(not jobs:busy("farm"), "finished canceled worker did not release its slot")
+jobs:tick()
+assert(reports == 1, "old worker or repeated tick published a second result")
+assert(jobs:start("farm", 1, function() return 0 end, function() end),
+    "finished worker permanently blocked a fresh request")
 ''')
 
     def test_explicit_join_rejection_blocks_features_without_farm_dispatch(self):
