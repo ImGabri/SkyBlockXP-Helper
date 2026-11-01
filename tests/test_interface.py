@@ -151,6 +151,7 @@ local expected = {
     ["Convert 6 to gold"]="GoldOnce", ["Convert 6 gold to rainbow"]="RainbowOnce",
     ["Open egg menu"]="OpenEggMenu", ["Open gold menu"]="OpenGoldMenu",
     ["Open rainbow menu"]="OpenRainbowMenu", ["Open inventory"]="OpenInventory",
+    ["Next egg"]="NextEgg", ["Next conversion species"]="NextSpecies",
     ["Clear status error"]="ClearError",
 }
 local buttons = {}
