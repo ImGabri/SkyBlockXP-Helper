@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.8.0",
+    Version = "0.8.1",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -583,8 +583,7 @@ function Interface.mount(spec)
     end
 
     toggle("Farm", "Auto farm (legacy: requires coin protocol)", "AutoFarm")
-    actionButton("Farm", "Arm Heaven chest: aim within 3 seconds", "ArmHeavenChest")
-    actionButton("Farm", "Stop Heaven chest assist", "StopHeavenChest")
+    actionButton("Farm", "Legacy Get Coins check (NOT Heaven assist)", "Reconnect")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -596,7 +595,8 @@ function Interface.mount(spec)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
     actionButton("Farm", "Inspect visible coin models (no network)", "InspectCoinModels")
     cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
-    actionButton("Farm", "Run compatibility check", "Reconnect")
+    actionButton("Farm", "HEAVEN: Aim at chest, arm within 3 seconds", "ArmHeavenChest")
+    actionButton("Farm", "Stop Heaven chest assist", "StopHeavenChest")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     rowOrder += 1

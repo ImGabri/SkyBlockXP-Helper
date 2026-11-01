@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.8.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.8.1**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.8.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.8.1. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -100,7 +100,7 @@ never loads pet tools, calls Save.Get or sends network remotes.
 
 1. Stand in Heaven Island, equip pets normally, and verify clicking the chest
    manually sends them to attack.
-2. Click **Arm Heaven chest**. Within 3 seconds move the mouse cursor to the
+2. Scroll down inside Farm. The **HEAVEN: Aim at chest, arm within 3 seconds** button is near the bottom, directly above **Stop Heaven chest assist** and **STOP ALL**. The earlier **Legacy Get Coins check (NOT Heaven assist)** is a separate unsupported experimental probe. Click **Arm Heaven chest**. Within 3 seconds move the mouse cursor to the
    actual chest (not a GUI overlay), and leave the camera/cursor stationary.
 3. The suite sends one `mouse1click()` input at that position. It waits until
    the targeted part leaves the Workspace, then clicks one matching replacement
