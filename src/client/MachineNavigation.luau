@@ -110,7 +110,9 @@ function Navigation:Approach(variant, active)
             if not current() then return false end
             if (root.Position - target).Magnitude <= ARRIVAL_DISTANCE then break end
             if not position(waypoint.Position) then error("Pathfinding returned an unreadable waypoint.", 0) end
-            if (root.Position - waypoint.Position).Magnitude <= WAYPOINT_DISTANCE then continue end
+            -- A nearby jump can still be required to clear the next obstacle.
+            if (root.Position - waypoint.Position).Magnitude <= WAYPOINT_DISTANCE
+                and waypoint.Action ~= Enum.PathWaypointAction.Jump then continue end
             self:_progress("Walking to " .. name .. " (" .. tostring(math.ceil((root.Position - target).Magnitude)) .. " studs)...")
             if not current() then return false end
             if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
