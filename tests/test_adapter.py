@@ -158,6 +158,34 @@ class AdapterTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("ADAPTER_TEST_OK", result.stdout)
 
+    def test_cancelled_connect_token_prevents_native_module_and_network_access(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect(function() return false end)
+assertBlocked(adapter)
+assert(nativeCalls == 0 and #calls == 0, "a canceled probe touched native modules or networking")
+''')
+
+    def test_probe_token_cancelled_during_reply_cannot_enable_capabilities(self):
+        self.run_case('''
+local live = true
+network.Invoke = function(command)
+    assert(command == "Get Coins")
+    live = false
+    return records
+end
+local adapter = PetSim99.new():Connect(function() return live end)
+assertBlocked(adapter)
+''')
+
+    def test_cancelled_snapshot_token_makes_no_new_network_request(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+calls = {}
+assert(not pcall(adapter.Snapshot, adapter, function() return false end))
+assert(#calls == 0, "canceled snapshot sent a new Get Coins request")
+assert(adapter.Supported.AutoFarm, "canceled read poisoned the current adapter")
+''')
+
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
         for change in ["game.PlaceId = 1", "game.GameId = 1"]:
             with self.subTest(change=change):
