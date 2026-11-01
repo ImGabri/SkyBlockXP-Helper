@@ -164,6 +164,7 @@ function PetSim99:_readSnapshot(probe, active)
     self._phase = "Waiting for Network.Invoke(Get Coins) to return"
     self:_report()
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
+    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     self._phase = "Validating Get Coins reply"
     self:_report()
     local records = if returned.n == 1 then returned[1] else nil
@@ -171,7 +172,6 @@ function PetSim99:_readSnapshot(probe, active)
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
         records = returned[2]
     end
-    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     local root = self:_root()
     if returned.n == 0 then
         error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
@@ -188,11 +188,16 @@ function PetSim99:_readSnapshot(probe, active)
     for id, raw in pairs(records) do
         if not identifier(id) or type(raw) ~= "table" or not vector(raw.p)
             or type(raw.a) ~= "string" or type(raw.n) ~= "string"
-            or (raw.health ~= nil and (not finite(raw.health) or raw.health < 0)) then
+            or (raw.health ~= nil and (not finite(raw.health) or raw.health < 0))
+            or (raw.h ~= nil and (not finite(raw.h) or raw.h < 0))
+            or (raw.health ~= nil and raw.h ~= nil and raw.health ~= raw.h) then
             error("Get Coins returned an unknown coin schema. Farming is disabled rather than guessing a wrapper or field mapping.", 0)
         end
         local instance = self._coins:FindFirstChild(tostring(id))
         local coinPart = instance and instance:FindFirstChild("Coin")
+        if not coinPart or not coinPart:IsA("BasePart") then
+            coinPart = instance and instance:FindFirstChild("POS")
+        end
         local areaAllowed = true
         if self._world and type(self._world.HasArea) == "function" then
             local ok, allowed = pcall(self._world.HasArea, raw.a)
@@ -200,11 +205,12 @@ function PetSim99:_readSnapshot(probe, active)
             areaAllowed = allowed == true
         end
         if instance and instance:IsA("Model") and coinPart and coinPart:IsA("BasePart") and areaAllowed then
-            local healthKnown = raw.health ~= nil
+            local health = if raw.health ~= nil then raw.health else raw.h
+            local healthKnown = health ~= nil
             allHealthKnown = allHealthKnown and healthKnown
             table.insert(candidates, {
                 id = id, name = raw.n, area = raw.a,
-                health = if healthKnown then raw.health else 1,
+                health = if healthKnown then health else 1,
                 healthKnown = healthKnown,
                 distance = (root.Position - raw.p).Magnitude,
                 position = raw.p, instance = instance,
@@ -219,7 +225,7 @@ function PetSim99:_readSnapshot(probe, active)
         end
     end
     if probe and #candidates == 0 then
-        error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin BasePart. Stand near event coins and reconnect.", 0)
+        error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin or POS BasePart. Stand near event coins and reconnect.", 0)
     end
     if not current() then error("Pet read canceled before module access.", 0) end
     self._phase = "Reading equipped pets via PetCmds.GetEquipped"
@@ -459,8 +465,19 @@ function PetSim99:Assign(target, pets, active)
             local key = tostring(uid)
             if not seen[key] and not assigned[key] then
                 seen[key] = true
-                self:_call("Invoke", "Join Coin", target.id, { uid })
+                local joined = self:_call("Invoke", "Join Coin", target.id, { uid })
                 if not current() then break end
+                if joined ~= true then
+                    if type(joined) ~= "table" then error("Join Coin returned an unsupported acknowledgement; no Farm Coin request sent.", 0) end
+                    local accepted = joined[uid]
+                    if accepted == nil and uid ~= key then accepted = joined[key] end
+                    if not current() then break end
+                    if accepted ~= true then
+                        self.Reason = "Join Coin did not accept an equipped pet; no farm request sent for that pet."
+                        if type(accepted) == "string" then self.Reason ..= " " .. accepted:sub(1, 300) end
+                        continue
+                    end
+                end
                 self:_call("Fire", "Farm Coin", target.id, uid)
                 count += 1
                 self._counts.FarmDispatches += 1
