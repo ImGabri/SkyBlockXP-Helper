@@ -140,7 +140,7 @@ end
 function PetSim99:_readSnapshot(probe)
     local generation = self._generation
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
-    local records = returned[1]
+    local records = if returned.n == 1 then returned[1] else nil
     -- Status+payload responses must pass the same concrete coin validation.
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
         records = returned[2]
