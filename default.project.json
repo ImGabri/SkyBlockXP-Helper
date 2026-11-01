@@ -1,0 +1,15 @@
+{
+  "name": "Pet Sim 99 (Pet Sim X) Automation suite",
+  "tree": {
+    "$className": "DataModel",
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "PetSimAutomation": {
+          "$path": "src/client"
+        }
+      }
+    }
+  }
+}
