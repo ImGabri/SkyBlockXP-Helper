@@ -476,16 +476,18 @@ function Interface.mount(spec)
         TextYAlignment = Enum.TextYAlignment.Top,
         TextColor3 = colors.muted,
         LayoutOrder = rowOrder,
-        Text = "Eggs spend in-game currency. Conversions use exactly 6 eligible pets of one selected species. Equipped, locked/favorite, shiny, hardcore and premium pets are excluded. The server decides conversion chances; current event support needs testing.",
+        Text = "Eggs spend in-game currency. Open Inventory first: conversion requires loaded, unlocked inventory slots. Choose an exact species; only 6 matching eligible pets are sent. The server decides conversion chances; current event support needs testing.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
     input("Pets", "Egg name", "EggName")
+    actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
     input("Pets", "Hatch interval (seconds)", "HatchInterval", 1, 30)
     actionButton("Pets", "Open egg once", "HatchOnce")
     toggle("Pets", "Auto hatch", "AutoHatch")
     actionButton("Pets", "Open egg menu", "OpenEggMenu")
     input("Pets", "Convert species (exact name / ID)", "ConversionSpecies")
+    actionButton("Pets", "Next conversion species", "NextSpecies")
     input("Pets", "Conversion interval (seconds)", "ConversionInterval", 2, 30)
     actionButton("Pets", "Convert 6 to gold", "GoldOnce")
     toggle("Pets", "Auto gold (6 normal pets)", "AutoGold")
