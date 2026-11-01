@@ -14,6 +14,7 @@ spec.loader.exec_module(builder)
 FIXTURE = r'''
 local realTypeof = typeof
 local function typeof(value)
+    if type(value) == "table" and type(value.ClassName) == "string" and type(value.IsA) == "function" then return "Instance" end
     return if type(value) == "table" and value.kind == "Vector3" then "Vector3" else realTypeof(value)
 end
 local vectorMeta = {}
@@ -32,6 +33,14 @@ local function instance(name,class,parent)
     function object:FindFirstChildOfClass(kind)
         for _, item in ipairs(self.Children) do if item:IsA(kind) then return item end end
     end
+    function object:IsDescendantOf(ancestor)
+        local current = self.Parent
+        while current do
+            if current == ancestor then return true end
+            current = current.Parent
+        end
+        return false
+    end
     if parent then table.insert(parent.Children,object) end
     return object
 end
@@ -44,6 +53,10 @@ goldPad.Position=Vector3.new(40,0,0)
 local rainbow=instance("Rainbow Machine","Model",interactive)
 local rainbowPad=instance("Pad","Part",rainbow)
 rainbowPad.Position=Vector3.new(80,0,0)
+local eggs=instance("Eggs","Folder",map)
+local egg=instance("Starter Egg","Model",eggs)
+local eggCenter=instance("Center","Part",egg)
+eggCenter.Position=Vector3.new(120,0,0)
 local character=instance("Character","Model",workspace)
 local root=instance("HumanoidRootPart","Part",character)
 root.Position=Vector3.new(0,0,0)
@@ -247,4 +260,78 @@ assert(navigation:Approach("Rainbow"),"closed navigation owner remained permanen
 computeHook=function() goldPad.Parent=nil end
 assert(not pcall(navigation.Approach,navigation,"Gold"))
 assert(#moves==0)
+''')
+
+    def test_replaced_root_or_humanoid_inside_same_character_cancels_arrival(self):
+        for change in [
+            'root.Name="OldRoot"; local replacement=instance("HumanoidRootPart","Part",character); replacement.Position=Vector3.new(1000,0,0)',
+            'local replacement=instance("ReplacementHumanoid","Humanoid",character); replacement.Health=100; table.insert(character.Children,1,replacement)',
+        ]:
+            with self.subTest(change=change):
+                self.run_case('''
+computeHook=function() ''' + change + ''' end
+assert(navigation:Approach("Gold")==false,"replaced rig component allowed false arrival")
+assert(#moves==0)
+''')
+
+    def test_approaches_only_the_selected_loaded_egg_center(self):
+        self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+assert(navigation:ApproachEgg(egg))
+assert(pathCalls==1 and math.abs(root.Position.X-120)<=8)
+''')
+
+    def test_already_near_egg_sends_no_path_or_move(self):
+        self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+root.Position=Vector3.new(115,0,0)
+assert(navigation:ApproachEgg(egg))
+assert(pathCalls==0 and #moves==0)
+''')
+
+    def test_missing_invalid_or_unloaded_egg_center_is_rejected(self):
+        for change in ['egg.Children={}', 'eggCenter.ClassName="Folder"', 'eggCenter.Position=Vector3.new(0/0,0,0)', 'egg.Parent=nil', 'eggs.Parent=nil', 'egg.ClassName="Folder"']:
+            with self.subTest(change=change):
+                self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+''' + change + '''
+assert(not pcall(navigation.ApproachEgg,navigation,egg))
+assert(pathCalls==0 and #moves==0)
+''')
+
+    def test_moved_or_unloaded_selected_egg_stops_without_another_waypoint(self):
+        for change in ['eggCenter.Position=Vector3.new(200,0,0)', 'eggCenter.Parent=nil', 'egg.Parent=nil', 'eggs.Parent=nil']:
+            with self.subTest(change=change):
+                self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+autoMove=false
+waitHook=function() ''' + change + ''' end
+assert(not pcall(navigation.ApproachEgg,navigation,egg))
+assert(#moves==2 and moves[2]==root.Position)
+''')
+
+    def test_canceled_egg_compute_and_walk_never_continue(self):
+        for cancel in ['compute', 'walk']:
+            with self.subTest(cancel=cancel):
+                self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+local active=true
+''' + ('computeHook=function() active=false end\n' if cancel == 'compute' else 'autoMove=false; waitHook=function() active=false end\n') + '''
+assert(navigation:ApproachEgg(egg,function() return active end)==false)
+assert(#moves==''' + ('0' if cancel == 'compute' else '2') + ''')
+''')
+
+    def test_egg_and_machine_walks_share_the_same_owner_slot(self):
+        self.run_case('''
+assert(type(navigation.ApproachEgg)=="function","egg navigation missing")
+autoMove=false
+waitHook=function() coroutine.yield("walking") end
+local worker=coroutine.create(function() navigation:ApproachEgg(egg) end)
+assert(coroutine.resume(worker))
+assert(not pcall(navigation.Approach,navigation,"Gold"),"machine walk overlapped egg walk")
+navigation:Stop()
+assert(coroutine.resume(worker))
+autoMove=true
+waitHook=nil
+assert(navigation:Approach("Gold"),"released egg owner blocked machine walk")
 ''')
