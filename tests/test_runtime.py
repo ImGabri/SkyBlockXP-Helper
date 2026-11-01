@@ -321,6 +321,31 @@ assert(navigation.Calls == 2 and care.LastMenu == "Gold")
 runtime:Destroy()
 ''')
 
+    def test_explicit_go_action_pauses_farm_even_when_auto_travel_is_off(self):
+        self.run_case('''
+runtime:Action("Reconnect")
+runtime:Action("PrepareCare")
+runtime:SetOption("MachineTravelMode", "Off")
+runtime:SetOption("AutoFarm", true)
+runtime:SetOption("WalkToTarget", true)
+navigationHook = function() coroutine.yield("manual machine journey") end
+assert(runtime:Action("GoGoldMachine"))
+runtime:Step()
+assert(adapter.AssignmentCalls == 0, "explicit Go action competed with farming in Off mode")
+runtime:Destroy()
+''')
+
+    def test_reloading_pet_tools_stops_native_movement_from_a_pending_journey(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+navigationHook = function() coroutine.yield("walking") end
+assert(runtime:Action("GoGoldMachine"))
+local stopped = navigation.Stops
+runtime:Action("PrepareCare")
+assert(navigation.Stops > stopped, "canceled walk left native MoveTo running")
+runtime:Destroy()
+''')
+
     def test_catalog_buttons_apply_canonical_settings_without_spending(self):
         self.run_case('''
 runtime:Action("PrepareCare")
