@@ -110,6 +110,28 @@ function Interface.mount(spec)
         MinSize = Vector2.new(280, 280),
     }, panel)
 
+    local function clampPanel(position)
+        if destroyed then return end
+        local viewport = gui.AbsoluteSize
+        if viewport.X <= 0 or viewport.Y <= 0 then return end
+        local halfWidth = math.min(panel.AbsoluteSize.X, viewport.X) / 2
+        local halfHeight = math.min(panel.AbsoluteSize.Y, viewport.Y) / 2
+        position = position or panel.Position
+        local x = position.X.Scale * viewport.X + position.X.Offset
+        local y = position.Y.Scale * viewport.Y + position.Y.Offset
+        panel.Position = UDim2.fromOffset(
+            math.clamp(x, halfWidth, math.max(halfWidth, viewport.X - halfWidth)),
+            math.clamp(y, halfHeight, math.max(halfHeight, viewport.Y - halfHeight))
+        )
+    end
+    connect(gui:GetPropertyChangedSignal("AbsoluteSize"), function()
+        dragInput = nil
+        local viewport = gui.AbsoluteSize
+        sizeConstraint.MinSize = Vector2.new(math.min(280, viewport.X), math.min(if collapsed then 48 else 280, viewport.Y))
+        clampPanel()
+    end)
+    connect(panel:GetPropertyChangedSignal("AbsoluteSize"), function() clampPanel() end)
+
     local header = make("Frame", {
         Name = "Header",
         Size = UDim2.new(1, 0, 0, 48),
@@ -477,6 +499,7 @@ function Interface.mount(spec)
         sizeConstraint.MaxSize = if collapsed then Vector2.new(520, 48) else Vector2.new(520, 620)
         sizeConstraint.MinSize = if collapsed then Vector2.new(280, 48) else Vector2.new(280, 280)
         collapseButton.Text = if collapsed then "+" else "-"
+        clampPanel()
     end)
     connect(unloadButton.Activated, function()
         action("Unload")
@@ -502,14 +525,9 @@ function Interface.mount(spec)
         if isMouse or inputObject == dragInput then
             local delta = inputObject.Position - dragStart
             local parentSize = gui.AbsoluteSize
-            local halfWidth = panel.AbsoluteSize.X / 2
-            local halfHeight = panel.AbsoluteSize.Y / 2
             local x = panelStart.X.Scale * parentSize.X + panelStart.X.Offset + delta.X
             local y = panelStart.Y.Scale * parentSize.Y + panelStart.Y.Offset + delta.Y
-            -- Keep a reachable header and prevent losing the panel off-screen.
-            x = math.clamp(x, halfWidth, math.max(halfWidth, parentSize.X - halfWidth))
-            y = math.clamp(y, halfHeight, math.max(halfHeight, parentSize.Y - halfHeight))
-            panel.Position = UDim2.fromOffset(x, y)
+            clampPanel(UDim2.fromOffset(x, y))
         end
     end)
     connect(UserInputService.InputEnded, function(inputObject)
@@ -545,6 +563,7 @@ function Interface.mount(spec)
     end
 
     refresh()
+    clampPanel()
     return handle
 end
 
