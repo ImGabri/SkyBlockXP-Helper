@@ -280,6 +280,26 @@ assert(care.Counts.HatchRequests == 0, "canceled hatch published a late result")
 runtime:Destroy()
 ''')
 
+    def test_slow_conversions_cannot_starve_hatching_or_other_conversion_stage(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+runtime:SetOption("ConversionSpecies", "Cat")
+for _, key in ipairs({"AutoHatch", "AutoGold", "AutoRainbow"}) do runtime:SetOption(key, true) end
+local order = {}
+careHook = function(kind, active)
+    if kind ~= "Connect" then table.insert(order, kind); coroutine.yield("slow pet operation") end
+end
+for _ = 1, 3 do
+    runtime:Step()
+    local worker = spawned[#spawned]
+    clock += 5
+    assert(coroutine.resume(worker))
+end
+assert(care.ConvertCalls == 2 and care.HatchCalls == 1, "one slow pet feature starved the other stages")
+runtime:Destroy()
+''')
+
     def test_connect_receives_the_cooperative_job_token(self):
         self.run_case('''
 assert(runtime:Action("Reconnect"))

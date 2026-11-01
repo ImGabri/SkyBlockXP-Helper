@@ -198,6 +198,18 @@ assert(care:Hatch("Starter Egg", "Single", function() return live end) == 0)
 assert(#calls == 0)
 ''')
 
+    def test_native_cancellation_releases_busy_owner_after_thread_is_closed(self):
+        self.run_case('''
+facade.Save.Get = function() coroutine.yield("native read"); return save end
+care:Connect()
+local worker = coroutine.create(function() care:Hatch("Starter Egg", "Single") end)
+assert(coroutine.resume(worker))
+assert(not pcall(care.Connect, care), "uncanceled native worker did not keep its slot")
+assert(coroutine.close(worker))
+assert(pcall(care.Connect, care), "closed native worker left pet tools permanently busy")
+assert(#calls == 0)
+''')
+
     def test_native_menus_restore_original_state_without_networking(self):
         self.run_case('''
 care:Connect()
