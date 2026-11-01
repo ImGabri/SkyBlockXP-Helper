@@ -456,8 +456,8 @@ function Interface.mount(spec)
         end)
     end
 
-    actionButton("Farm", "START Heaven Island AutoFarm (detected targets)", "StartHeavenSweep")
-    actionButton("Farm", "STOP Heaven Island AutoFarm", "StopHeavenSweep")
+    actionButton("Farm", "START Heaven Island AutoFarm [B]", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island AutoFarm [B]", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")

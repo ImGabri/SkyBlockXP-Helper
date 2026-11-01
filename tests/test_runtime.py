@@ -310,6 +310,7 @@ workspace.CurrentCamera = {
 local moves, clicks = {}, 0
 mousemoveabs = function(x, y) table.insert(moves, {x, y}) end
 mouse1click = function() clicks += 1 end
+player.GetMouse = function() return { Target = if #moves == 1 then small else coin } end
 isrbxactive = function() return true end
 local found, report = runtime:Action("ScanHeavenTargets")
 assert(found and string.find(report, "2 nearby", 1, true), report)
@@ -327,9 +328,57 @@ runtime:Step()
 assert(clicks == 2, "second breakable not clicked")
 clock += 2
 runtime:Step()
-assert(clicks == 2, "clicked same object twice instead of waiting for new instances")
+assert(clicks == 2, "clicked object while still cooling down")
+clock += 4
+runtime:Step()
+assert(#moves >= 3, "cooldown should let an existing object become eligible again")
 assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0)
 assert(runtime:Action("StopHeavenSweep"))
+runtime:Destroy()
+''')
+
+    def test_b_key_toggles_heaven_farm_without_toggling_while_typing(self):
+        self.run_case('''
+local inputBegan = signal()
+services.UserInputService = {
+    InputBegan = inputBegan,
+    GetFocusedTextBox = function() return nil end
+}
+-- Runtime attaches the InputBegan listener during construction.
+-- New runtime is used here so the fixture receives the new input service.
+local second = Runtime.new(player, {})
+mousemoveabs = function() end
+mouse1click = function() end
+Enum = { KeyCode = { B = "B" } }
+inputBegan:Fire({KeyCode = "B"}, false)
+assert(second.Options.HeavenIslandSweep)
+inputBegan:Fire({KeyCode = "B"}, false)
+assert(not second.Options.HeavenIslandSweep)
+inputBegan:Fire({KeyCode = "B"}, true)
+assert(not second.Options.HeavenIslandSweep)
+second:Destroy()
+runtime:Destroy()
+''')
+
+    def test_off_target_mouse_skips_click_without_stopping_farm(self):
+        self.run_case('''
+local target = { Name = "Heaven Vault", Parent = workspace, Position = { X=15, Y=0, Z=0 } }
+function target:IsA(k) return k == "BasePart" end
+function target:IsDescendantOf(p) return self.Parent == p end
+rootPart.Position = {X=0,Y=0,Z=0}
+workspace.GetDescendants = function() return {target} end
+workspace.CurrentCamera = {ViewportSize={X=1200,Y=800},
+    WorldToViewportPoint=function() return {X=200,Y=250,Z=1},true end}
+mousemoveabs = function() end
+local clicks = 0
+mouse1click = function() clicks += 1 end
+player.GetMouse = function() return { Target=nil } end
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+clock += 1
+runtime:Step()
+assert(clicks == 0 and runtime.Options.HeavenIslandSweep)
+assert(runtime.HeavenSweepMismatches >= 1)
 runtime:Destroy()
 ''')
 

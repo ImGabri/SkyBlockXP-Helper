@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.10.0",
+    Version = "0.11.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -583,8 +583,8 @@ function Interface.mount(spec)
         end)
     end
 
-    actionButton("Farm", "START Heaven Island AutoFarm (detected targets)", "StartHeavenSweep")
-    actionButton("Farm", "STOP Heaven Island AutoFarm", "StopHeavenSweep")
+    actionButton("Farm", "START Heaven Island AutoFarm [B]", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island AutoFarm [B]", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -2263,6 +2263,25 @@ function Runtime.new(player, parent)
             self:Publish()
         end
     end))
+    -- B toggles only the local Heaven Island input farm. Respect UI text input.
+    local inputOk, input = pcall(function() return game:GetService("UserInputService") end)
+    if inputOk and input and input.InputBegan then
+        table.insert(self.Connections, input.InputBegan:Connect(function(key, processed)
+            if processed or not self.Alive or not key or not Enum or not Enum.KeyCode
+                or key.KeyCode ~= Enum.KeyCode.B then return end
+            local focusOk, focused = pcall(input.GetFocusedTextBox, input)
+            if focusOk and focused then return end
+            if self.Options.HeavenIslandSweep then
+                self:StopHeavenSweep()
+            else
+                local started, reason = self:StartHeavenSweep()
+                if not started then
+                    self.State.LastError = "B AutoFarm toggle: " .. tostring(reason)
+                    self:Publish()
+                end
+            end
+        end))
+    end
     table.insert(self.Connections, game:GetService("TeleportService").TeleportInitFailed:Connect(function(who, _, message)
         if who == player and self.Alive then
             self.State.LastError = "Rejoin failed: " .. tostring(message)
@@ -2560,8 +2579,11 @@ function Runtime:StartHeavenSweep()
     self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
     self.HeavenSweepNextAt = 0
     self.HeavenSweepPending = nil
+    -- Each object can be retried after a cooldown, even if the same instance
+    -- remains in the Workspace after a click.
     self.HeavenSweepClicked = setmetatable({}, { __mode = "k" })
-    self.State.HeavenSweepMode = "Individual named/tagged object targeting"
+    self.HeavenSweepMismatches = 0
+    self.State.HeavenSweepMode = "Object targeting with mouse-hit verification; B to toggle"
     self.State.Status = "Heaven Island target AutoFarm running (input-only; no Get Coins)"
     self.State.LastError = ""
     self:ScanHeavenTargets()
@@ -2575,7 +2597,7 @@ end
 function Runtime:StopHeavenSweep()
     self.Options.HeavenIslandSweep = false
     self.HeavenSweepNextAt, self.HeavenSweepPending = nil, nil
-    self.State.HeavenSweepStatus = "Stopped"
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
     self:Publish()
     return true
 end
@@ -2614,22 +2636,36 @@ function Runtime:StepHeavenSweep()
     if pending then
         if now < pending.clickAt then return end
         self.HeavenSweepPending = nil
-        if not pending.instance:IsDescendantOf(workspace) or self.HeavenSweepClicked[pending.instance] then return end
-        -- Check that the candidate still projects into the gameplay portion.
-        local still, point, visible = pcall(camera.WorldToViewportPoint, camera, pending.position)
-        if not still or not visible or not point or point.Z <= 0
-            or point.X < 35 or point.X > viewport.X * 0.63
-            or point.Y < 110 or point.Y > viewport.Y * 0.9 then return end
+        local object = pending.instance
+        if not object:IsDescendantOf(workspace) then return end
+        local readyAt = self.HeavenSweepClicked[object] or 0
+        if now < readyAt then return end
+        -- Validate projected aim AFTER moving the cursor, not just the object's old coordinates.
+        -- This catches viewport / executor coordinate mismatches and UI overlays.
+        local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
+        local hit = if mouseOk and mouse then mouse.Target else nil
+        local matchesTarget = hit ~= nil
+            and (hit == object or (object:IsA("Model") and hit:IsDescendantOf(object)))
+        if not matchesTarget then
+            self.HeavenSweepMismatches = (self.HeavenSweepMismatches or 0) + 1
+            self.HeavenSweepClicked[object] = now + 1
+            self.HeavenSweepNextAt = now + 0.35
+            self.State.HeavenSweepStatus = "Skipped off-target cursor for " .. pending.kind
+                .. " (" .. tostring(self.HeavenSweepMismatches) .. " mismatches); no click sent"
+            -- Keep running; scan again when local models change.
+            self:Publish()
+            return
+        end
         local clicked, message = pcall(mouse1click)
         if not clicked then
             self.State.LastError = "Targeted click failed: " .. tostring(message)
             self:StopHeavenSweep()
             return
         end
-        self.HeavenSweepClicked[pending.instance] = true
+        self.HeavenSweepClicked[object] = now + math.max(3, (self.Options.FarmInterval or 0.75) * 3)
         self.State.HeavenSweepClicks = (self.State.HeavenSweepClicks or 0) + 1
-        self.State.HeavenSweepStatus = "Clicked " .. pending.kind .. ": " .. pending.name
-            .. " (#" .. tostring(self.State.HeavenSweepClicks) .. "; game rewards unverified)"
+        self.State.HeavenSweepStatus = "Clicked verified " .. pending.kind .. ": " .. pending.name
+            .. " (#" .. tostring(self.State.HeavenSweepClicks) .. "; rewards unverified)"
         self.HeavenSweepNextAt = now + math.clamp(self.Options.FarmInterval or 0.75, 0.4, 5)
         self:Publish()
         return
@@ -2642,7 +2678,8 @@ function Runtime:StepHeavenSweep()
     end
     local chosen, chosenPoint
     for _, target in ipairs(candidates) do
-        if not self.HeavenSweepClicked[target.instance] and target.instance:IsDescendantOf(workspace) then
+        if now >= (self.HeavenSweepClicked[target.instance] or 0)
+            and target.instance:IsDescendantOf(workspace) then
             local projected, point, visible = pcall(camera.WorldToViewportPoint, camera, target.position)
             if projected and visible and point and type(point.Z) == "number" and point.Z > 0
                 and point.X >= 35 and point.X <= viewport.X * 0.63
@@ -2664,7 +2701,7 @@ function Runtime:StepHeavenSweep()
     if not chosen then
         self.HeavenSweepNextAt = now + 1
         self.State.HeavenSweepStatus = "Scanned " .. tostring(#candidates)
-            .. " objects; none are unobstructed and visible in the left gameplay view"
+            .. " objects; waiting for cooldown or a visible unblocked target"
         return
     end
     local moved, message = pcall(mousemoveabs, math.floor(chosenPoint.X), math.floor(chosenPoint.Y))
@@ -2675,9 +2712,9 @@ function Runtime:StepHeavenSweep()
     end
     self.HeavenSweepPending = {
         instance = chosen.instance, position = chosen.position, kind = chosen.kind,
-        name = chosen.name, clickAt = now + 0.12,
+        name = chosen.name, clickAt = now + 0.20,
     }
-    self.HeavenSweepNextAt = now + 0.12
+    self.HeavenSweepNextAt = now + 0.20
     self.State.HeavenSweepStatus = "Aiming at " .. chosen.kind .. ": " .. chosen.name
 end
 
@@ -3091,7 +3128,8 @@ function Runtime:StopAll()
     self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
     self.State.ChestStatus = "Stopped"
     self.HeavenSweepNextAt = nil
-    self.State.HeavenSweepStatus = "Stopped"
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
+    self.HeavenSweepPending = nil
     for key, value in pairs(self.Options) do
         if type(value) == "boolean" then self.Options[key] = false end
     end
@@ -3174,8 +3212,9 @@ function Runtime:Diagnostics()
             .. "; attempted clicks=" .. tostring(self.State.ChestClicks or 0),
         "Heaven Island target scan: " .. tostring(self.State.HeavenScanStatus or "not scanned")
             .. "; identifiable targets=" .. tostring(self.State.HeavenTargetCount or 0),
-        "Heaven Island AutoFarm: " .. tostring(self.State.HeavenSweepStatus or "off")
+        "Heaven Island AutoFarm (B toggle): " .. tostring(self.State.HeavenSweepStatus or "off")
             .. "; clicks attempted=" .. tostring(self.State.HeavenSweepClicks or 0)
+            .. "; off-target skips=" .. tostring(self.HeavenSweepMismatches or 0)
             .. "; input mode=" .. tostring(self.State.HeavenSweepMode or "not started"),
         "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),

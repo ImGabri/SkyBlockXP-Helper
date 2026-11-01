@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.10.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.11.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.10.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.11.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -116,7 +116,7 @@ If the chest reuses the same instance or clicking doesn't select it, the helper
 will not auto-retarget. It does not farm every breakable on Heaven Island or
 confirm any reward. It does not bypass game limits.
 
-## v0.10.0: target-aware Heaven Island AutoFarm
+## v0.11.0: B toggle, cursor verification and ongoing target retries
 
 On startup, the suite performs a *local-only*, passive scan of replicated
 Workspace objects. It looks for nearby individually named or tagged **vaults,
@@ -127,13 +127,17 @@ and category breakdown appear on Status; click **SCAN small breakables NOW**
 to refresh on demand. A running farm refreshes the scan every seven seconds.
 
 In Heaven Island (not Heaven's Gate), equip pets, close the Teleport menu,
-face the small breakables, then click **START Heaven Island AutoFarm (detected
-targets)**. The script only moves the cursor to a candidate with a visible
-world-to-screen position in the left gameplay view and clicks **once per
-individual object instance**. It waits for the cursor to settle in a
-separate step; it never clicks a fixed screen pattern. Objects containing
+face the small breakables, then press **B** (or click **START Heaven Island
+AutoFarm [B]**). Press **B** again to stop. Typing into a text box will not
+activate the hotkey. The script only moves the cursor to a candidate with a visible
+world-to-screen position in the left gameplay view and clicks only when `Player:GetMouse().Target` confirms that the cursor
+actually points to the selected world object. It retries each object on a
+bounded cooldown instead of permanently excluding the same instance. Cursor
+mismatches are counted in Status and never produce clicks. The current
+input mode needs Roblox to be focused and both mouse input functions to
+work; it never clicks a fixed screen pattern. Objects containing
 known giant/Angel/Heaven's Gate chest names, large models, pets and effects
-are excluded. **STOP Heaven Island AutoFarm** or **STOP ALL** disables it.
+are excluded. **B**, **STOP Heaven Island AutoFarm**, or **STOP ALL** disables it.
 
 This is a best-effort input-only targeting system, **not proven game-side
 farming**. Generic/unreplicated breakables or decorative objects with
