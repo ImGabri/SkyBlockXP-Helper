@@ -456,8 +456,8 @@ function Interface.mount(spec)
         end)
     end
 
-    toggle("Farm", "Auto farm (legacy: requires coin protocol)", "AutoFarm")
-    actionButton("Farm", "Legacy Get Coins check (NOT Heaven assist)", "Reconnect")
+    actionButton("Farm", "START Heaven Island autofarm (small breakables)", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island autofarm", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -469,8 +469,9 @@ function Interface.mount(spec)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
     actionButton("Farm", "Inspect visible coin models (no network)", "InspectCoinModels")
     cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
-    actionButton("Farm", "HEAVEN: Aim at chest, arm within 3 seconds", "ArmHeavenChest")
-    actionButton("Farm", "Stop Heaven chest assist", "StopHeavenChest")
+    actionButton("Farm", "START Heaven Island screen sweep", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island screen sweep", "StopHeavenSweep")
+    actionButton("Farm", "Legacy Get Coins check (unsupported)", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     rowOrder += 1
@@ -544,7 +545,9 @@ function Interface.mount(spec)
             tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
-        ) .. "\n\nHEAVEN CHEST ASSIST\n" .. tostring(snapshot.ChestStatus or "Off")
+        ) .. "\n\nHEAVEN ISLAND SCREEN FARM\n" .. tostring(snapshot.HeavenSweepStatus or "Off")
+            .. "\nClick attempts: " .. tostring(snapshot.HeavenSweepClicks or 0)
+            .. "\n\nHEAVEN CHEST ASSIST (OLD)\n" .. tostring(snapshot.ChestStatus or "Off")
             .. "\nClicks attempted: " .. tostring(snapshot.ChestClicks or 0)
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")

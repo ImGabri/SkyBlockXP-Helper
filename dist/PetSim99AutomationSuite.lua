@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.8.1",
+    Version = "0.9.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -16,7 +16,8 @@ return table.freeze({
     }),
     Options = table.freeze({
         AutoFarm = false,
-        HeavenChestAssist = false, -- Cursor-targeted chest input; independent of the unavailable coin protocol.
+        HeavenChestAssist = false, -- Previous single-chest assist; kept for compatibility.
+        HeavenIslandSweep = false, -- Explicit input-only farm mode; no module/network probing.
         AutoCollectOrbs = false,
         AutoCollectLootbags = false,
         WalkToTarget = false,
@@ -582,8 +583,8 @@ function Interface.mount(spec)
         end)
     end
 
-    toggle("Farm", "Auto farm (legacy: requires coin protocol)", "AutoFarm")
-    actionButton("Farm", "Legacy Get Coins check (NOT Heaven assist)", "Reconnect")
+    actionButton("Farm", "START Heaven Island autofarm (small breakables)", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island autofarm", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -595,8 +596,9 @@ function Interface.mount(spec)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
     actionButton("Farm", "Inspect visible coin models (no network)", "InspectCoinModels")
     cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
-    actionButton("Farm", "HEAVEN: Aim at chest, arm within 3 seconds", "ArmHeavenChest")
-    actionButton("Farm", "Stop Heaven chest assist", "StopHeavenChest")
+    actionButton("Farm", "START Heaven Island screen sweep", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island screen sweep", "StopHeavenSweep")
+    actionButton("Farm", "Legacy Get Coins check (unsupported)", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     rowOrder += 1
@@ -670,7 +672,9 @@ function Interface.mount(spec)
             tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
-        ) .. "\n\nHEAVEN CHEST ASSIST\n" .. tostring(snapshot.ChestStatus or "Off")
+        ) .. "\n\nHEAVEN ISLAND SCREEN FARM\n" .. tostring(snapshot.HeavenSweepStatus or "Off")
+            .. "\nClick attempts: " .. tostring(snapshot.HeavenSweepClicks or 0)
+            .. "\n\nHEAVEN CHEST ASSIST (OLD)\n" .. tostring(snapshot.ChestStatus or "Off")
             .. "\nClicks attempted: " .. tostring(snapshot.ChestClicks or 0)
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")
@@ -2098,6 +2102,7 @@ local numeric = {
 local booleans = {
     AutoFarm = true,
     HeavenChestAssist = true,
+    HeavenIslandSweep = true,
     AutoCollectOrbs = true,
     AutoCollectLootbags = true,
     WalkToTarget = true,
@@ -2228,6 +2233,7 @@ function Runtime.new(player, parent)
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
         if self.Options.HeavenChestAssist then self:StopHeavenChest() end
+        if self.Options.HeavenIslandSweep then self:StopHeavenSweep() end
         self.Jobs:cancel("care")
         self.Navigator:Stop()
         self:StopNavigation()
@@ -2358,6 +2364,144 @@ function Runtime:StepHeavenChest()
     self.ChestClickedPart = target
     self.State.ChestClicks = (self.State.ChestClicks or 0) + 1
     self.State.ChestStatus = "Clicked once; waiting for chest to disappear (rewards unverified)"
+    self:Publish()
+end
+
+-- v0.9 Heaven Island input-only screen farm.
+-- Each step clicks one distinct game-view position. This does NOT inspect game
+-- modules, fabricate coin records, scan hidden remotes or claim confirmed rewards.
+-- The player must stand in Heaven Island, close menus and face the small breakables.
+local HEAVEN_SWEEP_X = { 0.18, 0.26, 0.34, 0.42, 0.50, 0.58 }
+local HEAVEN_SWEEP_Y = { 0.32, 0.42, 0.52, 0.62, 0.72 }
+
+function Runtime:StartHeavenSweep()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" then
+        return false, "mouse1click() is unavailable in this executor. No input will be attempted."
+    end
+    self.Options.HeavenIslandSweep = true
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.HeavenSweepIndex = 0
+    self.HeavenSweepNextAt = os.clock() + (if type(mousemoveabs) == "function" then 0 else 3)
+    self.State.HeavenSweepMode = if type(mousemoveabs) == "function" then "Screen sweep" else "Cursor click"
+    self.State.HeavenSweepStatus = if type(mousemoveabs) == "function"
+        then "ON: sweeping left/center of screen; keep Heaven Island small breakables visible"
+        else "ON: aim your mouse at breakables within 3 seconds; move cursor manually to change targets"
+    self.State.Status = "Heaven Island input farm active — no Get Coins check required"
+    self.State.LastError = ""
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenSweep()
+    self.Options.HeavenIslandSweep = false
+    self.HeavenSweepNextAt = nil
+    self.State.HeavenSweepStatus = "Stopped"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenSweep()
+    if not self.Options.HeavenIslandSweep then return end
+    if os.clock() < (self.HeavenSweepNextAt or 0) then return end
+    if type(mouse1click) ~= "function" then
+        self.State.LastError = "Heaven Island farm stopped: mouse1click() is unavailable."
+        self:StopHeavenSweep()
+        return
+    end
+    if type(isrbxactive) == "function" then
+        local ok, focused = pcall(isrbxactive)
+        if not ok or focused ~= true then
+            self.HeavenSweepNextAt = os.clock() + 1
+            self.State.HeavenSweepStatus = "Paused: Roblox is not in focus"
+            return
+        end
+    end
+    local userInputOk, inputService = pcall(function()
+        return game:GetService("UserInputService")
+    end)
+    if userInputOk and inputService and type(inputService.GetFocusedTextBox) == "function" then
+        local ok, input = pcall(inputService.GetFocusedTextBox, inputService)
+        if ok and input then
+            self.HeavenSweepNextAt = os.clock() + 1
+            return
+        end
+    end
+    local camera = workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize
+    local screenMode = type(mousemoveabs) == "function" and viewport
+        and type(viewport.X) == "number" and type(viewport.Y) == "number"
+        and viewport.X > 300 and viewport.Y > 240
+    local px, py
+    if screenMode then
+        local total = #HEAVEN_SWEEP_X * #HEAVEN_SWEEP_Y
+        self.HeavenSweepIndex = ((self.HeavenSweepIndex or 0) % total) + 1
+        local index = self.HeavenSweepIndex
+        local rowIndex = math.floor((index - 1) / #HEAVEN_SWEEP_X) + 1
+        local columnIndex = ((index - 1) % #HEAVEN_SWEEP_X) + 1
+        -- Zigzag so click locations span the scene instead of clustering.
+        if rowIndex % 2 == 0 then columnIndex = #HEAVEN_SWEEP_X + 1 - columnIndex end
+        px = math.floor(viewport.X * HEAVEN_SWEEP_X[columnIndex] + 0.5)
+        py = math.floor(viewport.Y * HEAVEN_SWEEP_Y[rowIndex] + 0.5)
+
+        -- When a raycast is available, exclude clearly named giant/boss chests.
+        -- If it cannot identify a part, the normal screen-click sweep continues.
+        if type(camera.ViewportPointToRay) == "function" and type(workspace.Raycast) == "function" then
+            local rayOk, ray = pcall(camera.ViewportPointToRay, camera, px, py)
+            if rayOk and ray then
+                local hitOk, hit = pcall(workspace.Raycast, workspace, ray.Origin, ray.Direction * 500)
+                if hitOk and hit and hit.Instance then
+                    local current, depth, largeChest = hit.Instance, 0, false
+                    while current and depth < 8 do
+                        local name = string.lower(tostring(current.Name))
+                        for _, term in ipairs({ "grand heaven", "heavens gate", "giant chest", "big chest", "boss chest", "angel chest" }) do
+                            if string.find(name, term, 1, true) then largeChest = true; break end
+                        end
+                        if largeChest then break end
+                        current, depth = current.Parent, depth + 1
+                    end
+                    if largeChest then
+                        self.HeavenSweepNextAt = os.clock() + 0.12
+                        self.State.HeavenSweepStatus = "Skipped identifiable giant/Heavens Gate chest"
+                        return
+                    end
+                end
+            end
+        end
+        local moved, message = pcall(mousemoveabs, px, py)
+        if not moved then
+            self.State.LastError = "Screen mouse movement failed: " .. tostring(message)
+            self:StopHeavenSweep()
+            return
+        end
+        -- Let the in-game cursor target update before simulating the click.
+        task.wait(0.04)
+        if not self.Options.HeavenIslandSweep or not self.Alive then return end
+    else
+        -- If cursor moving isn't supported, click only at the user's own cursor.
+        -- A short countdown on Start gives time to leave the button.
+        local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
+        if mouseOk and mouse and camera and viewport and viewport.X then
+            if type(mouse.X) == "number" and mouse.X > viewport.X * 0.64 then
+                self.HeavenSweepNextAt = os.clock() + 0.5
+                self.State.HeavenSweepStatus = "Cursor is over right-side UI; move it onto the breakables"
+                return
+            end
+        end
+    end
+    local clicked, message = pcall(mouse1click)
+    if not clicked then
+        self.State.LastError = "Heaven Island click failed: " .. tostring(message)
+        self:StopHeavenSweep()
+        return
+    end
+    self.State.HeavenSweepClicks = (self.State.HeavenSweepClicks or 0) + 1
+    self.State.HeavenSweepStatus = if screenMode
+        then "Click attempt #" .. tostring(self.State.HeavenSweepClicks)
+            .. " at " .. tostring(px) .. "," .. tostring(py) .. " (screen sweep)"
+        else "Click attempt #" .. tostring(self.State.HeavenSweepClicks) .. " (cursor position)"
+    self.HeavenSweepNextAt = os.clock() + math.clamp(self.Options.FarmInterval or 0.75, 0.35, 4)
     self:Publish()
 end
 
@@ -2522,6 +2666,7 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
+    self:StepHeavenSweep()
     self:StepHeavenChest()
     self:StepCare()
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
@@ -2704,6 +2849,9 @@ function Runtime:SetOption(key, value)
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
+    if key == "HeavenIslandSweep" and parsed then
+        return false, "Use START Heaven Island autofarm; do not use the legacy network toggle."
+    end
     if key == "HeavenChestAssist" and not parsed then
         self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
         self.State.ChestStatus = "Stopped"
@@ -2766,6 +2914,8 @@ function Runtime:StopAll()
     self.NextAt = {}
     self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
     self.State.ChestStatus = "Stopped"
+    self.HeavenSweepNextAt = nil
+    self.State.HeavenSweepStatus = "Stopped"
     for key, value in pairs(self.Options) do
         if type(value) == "boolean" then self.Options[key] = false end
     end
@@ -2846,6 +2996,9 @@ function Runtime:Diagnostics()
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
         "Heaven chest input assist: " .. tostring(self.State.ChestStatus or "off")
             .. "; attempted clicks=" .. tostring(self.State.ChestClicks or 0),
+        "Heaven Island sweep: " .. tostring(self.State.HeavenSweepStatus or "off")
+            .. "; clicks attempted=" .. tostring(self.State.HeavenSweepClicks or 0)
+            .. "; input mode=" .. tostring(self.State.HeavenSweepMode or "not started"),
         "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
@@ -2859,6 +3012,8 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "StartHeavenSweep" then return self:StartHeavenSweep()
+    elseif action == "StopHeavenSweep" then return self:StopHeavenSweep()
     elseif action == "ArmHeavenChest" then return self:ArmHeavenChest()
     elseif action == "StopHeavenChest" then return self:StopHeavenChest()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()

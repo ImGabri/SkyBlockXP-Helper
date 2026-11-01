@@ -13,6 +13,7 @@ local numeric = {
 local booleans = {
     AutoFarm = true,
     HeavenChestAssist = true,
+    HeavenIslandSweep = true,
     AutoCollectOrbs = true,
     AutoCollectLootbags = true,
     WalkToTarget = true,

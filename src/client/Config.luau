@@ -2,7 +2,7 @@
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.8.1",
+    Version = "0.9.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -10,7 +10,8 @@ return table.freeze({
     }),
     Options = table.freeze({
         AutoFarm = false,
-        HeavenChestAssist = false, -- Cursor-targeted chest input; independent of the unavailable coin protocol.
+        HeavenChestAssist = false, -- Previous single-chest assist; kept for compatibility.
+        HeavenIslandSweep = false, -- Explicit input-only farm mode; no module/network probing.
         AutoCollectOrbs = false,
         AutoCollectLootbags = false,
         WalkToTarget = false,

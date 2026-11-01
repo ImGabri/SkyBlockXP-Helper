@@ -280,6 +280,63 @@ assert(not runtime.Options.HeavenChestAssist)
 runtime:Destroy()
 ''')
 
+    def test_heaven_island_sweep_clicks_scene_without_coin_protocol(self):
+        self.run_case('''
+local moved, clicks = {}, 0
+workspace.CurrentCamera = { ViewportSize = { X = 1200, Y = 800 } }
+mousemoveabs = function(x, y) table.insert(moved, { x, y }) end
+mouse1click = function() clicks += 1 end
+isrbxactive = function() return true end
+assert(runtime:Action("StartHeavenSweep"))
+assert(runtime.Options.HeavenIslandSweep and not runtime.Ready)
+runtime:Step()
+assert(clicks == 1 and #moved == 1 and moved[1][1] < 780, "screen sweep first click missing or covered UI")
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0, "sweep touched game network module")
+runtime:Step()
+assert(clicks == 1, "sweep ignored click interval")
+clock += 1
+runtime:Step()
+assert(clicks == 2 and #moved == 2 and moved[2][1] ~= moved[1][1], "screen sweep failed to visit next target")
+assert(runtime:Action("StopHeavenSweep"))
+clock += 2
+runtime:Step()
+assert(clicks == 2, "stopped screen sweep kept clicking")
+assert(ui.State.HeavenSweepClicks == 2)
+runtime:Destroy()
+''')
+
+    def test_heaven_island_sweep_pauses_when_roblox_unfocused(self):
+        self.run_case('''
+workspace.CurrentCamera = { ViewportSize = { X = 1000, Y = 700 } }
+mousemoveabs = function() error("window was inactive") end
+mouse1click = function() error("window was inactive") end
+isrbxactive = function() return false end
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+assert(runtime.Options.HeavenIslandSweep, "unfocused status incorrectly stopped the sweep")
+assert(ui.State.HeavenSweepClicks == nil and adapter.NativeCalls == 0)
+runtime:Destroy()
+''')
+
+    def test_heaven_island_sweep_fallback_clicks_cursor_when_move_missing(self):
+        self.run_case('''
+workspace.CurrentCamera = { ViewportSize = { X = 1200, Y = 800 } }
+mousemoveabs = nil
+mouse1click = function() _G.clicks = (_G.clicks or 0) + 1 end
+player.GetMouse = function() return { X = 300, Y = 500 } end
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+assert(ui.State.HeavenSweepClicks == nil)
+clock += 4
+runtime:Step()
+assert(ui.State.HeavenSweepClicks == 1 and runtime.Options.HeavenIslandSweep)
+assert(runtime:Action("StopAll") == nil)
+clock += 2
+runtime:Step()
+assert(ui.State.HeavenSweepClicks == 1)
+runtime:Destroy()
+''')
+
     def test_startup_is_passive_until_explicit_manual_reconnect(self):
         self.run_case('''
 assert(adapter.ConnectCalls == 0 and adapter.NativeCalls == 0, "startup invoked game-native discovery without manual reconnect")
