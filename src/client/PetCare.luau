@@ -53,23 +53,32 @@ function PetCare:Connect(active)
             end
         end
         if not current() then return end
+        self._loader = loaderName
         self._phase = "Loading pet API facade"
         self:_report()
         local facade = loader(library)
         if not current() then return end
         if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+        self._phase = "Reading public Library.Network"
+        self:_report()
         local network = facade.Network
         if not current() then return end
         local invoke = type(network) == "table" and network.Invoke
         if not current() then return end
+        self._phase = "Reading public Library.Save"
+        self:_report()
         local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
+        self._phase = "Reading public Library.PetCmds"
+        self:_report()
         local pets = facade.PetCmds
         if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
         if not current() then return end
+        self._phase = "Reading public Library.Directory"
+        self:_report()
         local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
