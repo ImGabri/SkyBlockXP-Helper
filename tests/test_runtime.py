@@ -181,6 +181,16 @@ function care:NextChoice(kind, previous)
 end
 function care:Destroy() self.Destroyed = true end
 local CareStub = { new = function() return care end }
+local navigationHook
+local navigation = { Calls = 0, Stops = 0 }
+function navigation:Approach(variant, active)
+    self.Calls += 1
+    self.LastVariant = variant
+    if navigationHook then navigationHook(variant, active) end
+    return not active or active()
+end
+function navigation:Stop() self.Stops += 1 end
+local NavigationStub = { new = function() return navigation end }
 
 local function contains(text, expected)
     assert(string.find(text, expected, 1, true), "Missing text '" .. expected .. "' in '" .. text .. "'")
@@ -202,6 +212,7 @@ class RuntimeTests(unittest.TestCase):
             (sources / "Interface.luau").write_text("return InterfaceStub\n", encoding="utf-8")
             (sources / "PetSim99.luau").write_text("return AdapterStub\n", encoding="utf-8")
             (sources / "PetCare.luau").write_text("return CareStub\n", encoding="utf-8")
+            (sources / "MachineNavigation.luau").write_text("return NavigationStub\n", encoding="utf-8")
             (sources / "init.client.luau").write_text(
                 'local Runtime = require(script.Runtime)\n'
                 'local Config = require(script.Config)\n'
@@ -260,6 +271,53 @@ assert(runtime:Action("OpenEggMenu") and care.LastMenu == "Egg")
 assert(runtime:Action("OpenInventory") and care.LastMenu == "Inventory")
 runtime.State.LastError = "old error"
 assert(runtime:Action("ClearError") and runtime.State.LastError == "")
+runtime:Destroy()
+''')
+
+    def test_conversion_walks_first_and_path_failure_never_spends_pets(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("ConversionSpecies", "Cat")
+navigationHook = function() error("machine path is blocked") end
+assert(runtime:Action("GoldOnce"))
+assert(navigation.Calls == 1 and care.ConvertCalls == 0, "conversion ignored failed approach")
+contains(runtime.State.LastError, "machine path is blocked")
+navigationHook = nil
+assert(runtime:Action("GoldOnce"))
+assert(navigation.Calls == 2 and navigation.LastVariant == "Gold" and care.ConvertCalls == 1)
+runtime:Destroy()
+''')
+
+    def test_stop_during_walk_prevents_conversion_and_pauses_farm_navigation(self):
+        self.run_case('''
+runtime:Action("Reconnect")
+runtime:Action("PrepareCare")
+runtime:SetOption("AutoFarm", true)
+runtime:SetOption("WalkToTarget", true)
+runtime:SetOption("ConversionSpecies", "Cat")
+nativeCancelThrows = true
+navigationHook = function() coroutine.yield("walking to machine") end
+runtime:Action("GoldOnce")
+local pending = spawned[#spawned]
+runtime:Step()
+assert(adapter.AssignmentCalls == 0, "farm movement competed with machine approach")
+runtime:StopAll()
+assert(navigation.Stops > 0)
+assert(coroutine.resume(pending))
+assert(care.ConvertCalls == 0, "stopped approach still consumed pets")
+runtime:Destroy()
+''')
+
+    def test_machine_shortcuts_approach_then_open_and_off_mode_can_stay_manual(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+assert(runtime:Action("GoGoldMachine"))
+assert(navigation.Calls == 1 and navigation.LastVariant == "Gold" and care.MenuCalls == 0)
+assert(runtime:Action("OpenRainbowMenu"))
+assert(navigation.Calls == 2 and navigation.LastVariant == "Rainbow" and care.LastMenu == "Rainbow")
+assert(runtime:SetOption("MachineTravelMode", "Off"))
+assert(runtime:Action("OpenGoldMenu"))
+assert(navigation.Calls == 2 and care.LastMenu == "Gold")
 runtime:Destroy()
 ''')
 

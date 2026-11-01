@@ -139,7 +139,7 @@ end
 ''')
 
     def test_no_selected_species_no_batch_and_protected_pets_are_not_consumed(self):
-        for field in ["lk", "locked", "favorite", "fav", "hc", "sh", "dm"]:
+        for field in ["l", "lk", "locked", "favorite", "fav", "hc", "sh", "dm"]:
             with self.subTest(field=field):
                 self.run_case(f'''
 for _, pet in ipairs(inventory) do if not pet.g then pet.{field} = true end end
@@ -157,6 +157,7 @@ assert(#calls == 0)
             'directory.Pets.cat.huge = true',
             'directory.Pets.cat.titanic = true',
             'directory.Pets.cat.isPremium = true',
+            'directory.Pets.cat.isGift = true',
         ]:
             with self.subTest(change=change):
                 self.run_case(change + '''
