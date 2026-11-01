@@ -35,11 +35,21 @@ local function childSummary(parent, limit)
     return if result == "" then "empty" else result
 end
 
-local function requireModule(module, path)
+local function selectLoader()
+    if type(getrenv) == "function" then
+        local ok, environment = pcall(getrenv)
+        if ok and type(environment) == "table" and type(environment.require) == "function" then
+            return environment.require, "getrenv().require"
+        end
+    end
+    return require, "require"
+end
+
+local function requireModule(module, path, loader)
     if not module or not module:IsA("ModuleScript") then
         error(path .. " is not an available ModuleScript. Reconnect after the event finishes loading.", 0)
     end
-    local ok, value = pcall(require, module)
+    local ok, value = pcall(loader or require, module)
     if not ok then
         error("Native require of " .. path .. " failed: " .. tostring(value)
             .. ". Module access may be unsupported by this executor; no bypass is attempted.", 0)
@@ -54,17 +64,21 @@ local function responseSummary(result)
     return "returns=" .. tostring(result.n) .. "; types=" .. (if #types > 0 then table.concat(types, ",") else "none")
 end
 
-local function exportSummary(exports)
+local function exportSummary(exports, expected)
     local names = {}
+    local keys = {}
     for name, value in pairs(exports) do
-        if type(name) == "string" then
-            local shape = typeof(value)
-            if type(value) == "function" and debug and type(debug.info) == "function" then
-                local ok, count, variadic = pcall(debug.info, value, "a")
-                if ok then shape ..= "(args=" .. tostring(count) .. ",variadic=" .. tostring(variadic) .. ")" end
-            end
-            table.insert(names, name .. ":" .. shape)
+        if type(name) == "string" then keys[name] = true end
+    end
+    for _, name in ipairs(expected or {}) do keys[name] = true end
+    for name in pairs(keys) do
+        local readable, value = pcall(function() return exports[name] end)
+        local shape = if readable then typeof(value) else "unavailable"
+        if readable and type(value) == "function" and debug and type(debug.info) == "function" then
+            local ok, count, variadic = pcall(debug.info, value, "a")
+            if ok then shape ..= "(args=" .. tostring(count) .. ",variadic=" .. tostring(variadic) .. ")" end
         end
+        table.insert(names, name .. ":" .. shape)
     end
     table.sort(names)
     while #names > 40 do table.remove(names) end
@@ -94,6 +108,8 @@ end
 function PetSim99:_report()
     self.Report = (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nModule loader: " .. (self._loaderName or "not selected")
+        .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
         .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
         .. "\nPetCmds exports: " .. (self._petExports or "not loaded")
         .. string.format("\nRequests only: %d pet farm dispatches; %d orb IDs; %d lootbag IDs. No collection/break confirmation is inferred.",
@@ -231,6 +247,7 @@ function PetSim99:Connect(active)
     self._network, self._petCmds, self._world, self._coins, self._things = nil, nil, nil, nil, nil
     self._assigned = {}
     self._coinResponse, self._networkExports, self._petExports = nil, nil, nil
+    self._moduleLoader, self._loaderName, self._networkProvider = nil, nil, nil
     self._cooldowns = setmetatable({}, { __mode = "k" })
     local matches = game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId
     local storage = game:GetService("ReplicatedStorage")
@@ -256,20 +273,47 @@ function PetSim99:Connect(active)
             error("Enter Classic Event place " .. tostring(Config.Target.PlaceId) .. " in universe "
                 .. tostring(Config.Target.UniverseId) .. " and reconnect. Current destination differs.", 0)
         end
-        if not library or not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
-        local networkModule = client:FindFirstChild("Network")
-        local networkPath = "Library.Client.Network"
-        if not networkModule then
-            networkModule = library:FindFirstChild("Network")
-            networkPath = "Library.Network"
+        if not library then error("ReplicatedStorage.Library is not loaded. Wait inside the event and reconnect.", 0) end
+        local loader, loaderName = selectLoader()
+        if not current() then return end
+        self._moduleLoader, self._loaderName = loader, loaderName
+        local network, petCmds, world, networkPath
+        if library:IsA("ModuleScript") then
+            -- Use the documented public library rather than bypassing its facade.
+            self._networkProvider = "ReplicatedStorage.Library"
+            networkPath = "ReplicatedStorage.Library.Network"
+            local facade = requireModule(library, "ReplicatedStorage.Library", loader)
+            if not current() then return end
+            network, petCmds = facade.Network, facade.PetCmds
+            local ok, value = pcall(function() return facade.WorldCmds end)
+            if ok then world = value end
+            if type(network) ~= "table" or type(petCmds) ~= "table" then
+                error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
+            end
+        else
+            -- Compatibility for legacy folder-only layouts; current event has a facade.
+            if not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
+            local networkModule = client:FindFirstChild("Network")
+            networkPath = "Library.Client.Network"
+            if not networkModule then
+                networkModule = library:FindFirstChild("Network")
+                networkPath = "Library.Network"
+            end
+            self._networkProvider = networkPath
+            network = requireModule(networkModule, networkPath, loader)
+            if not current() then return end
+            petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
+            if not current() then return end
+            local worldModule = client:FindFirstChild("WorldCmds")
+            if worldModule and worldModule:IsA("ModuleScript") then
+                local loaded, value = pcall(loader, worldModule)
+                if not current() then return end
+                if loaded then world = value end
+            end
         end
-        local network = requireModule(networkModule, networkPath)
-        if not current() then return end
-        local petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds")
-        if not current() then return end
         self._network, self._petCmds = network, petCmds
-        self._networkExports = exportSummary(network)
-        self._petExports = exportSummary(petCmds)
+        self._networkExports = exportSummary(network, { "Invoke", "Fire" })
+        self._petExports = exportSummary(petCmds, { "GetEquipped" })
         if type(self._network.Invoke) ~= "function" or type(self._network.Fire) ~= "function" then
             error(networkPath .. " lacks Invoke/Fire functions; this protocol is unsupported.", 0)
         end
@@ -281,12 +325,7 @@ function PetSim99:Connect(active)
         if not self._coins or not self._coins:IsA("Folder") then
             error("__THINGS.Coins is not an available Folder. Enter a loaded coin area and reconnect.", 0)
         end
-        local worldModule = client:FindFirstChild("WorldCmds")
-        if worldModule and worldModule:IsA("ModuleScript") then
-            local loaded, value = pcall(require, worldModule)
-            if not current() then return end
-            if loaded and type(value) == "table" and type(value.HasArea) == "function" then self._world = value end
-        end
+        if type(world) == "table" and type(world.HasArea) == "function" then self._world = world end
         local snapshot = self:_readSnapshot(true, active)
         if not current() then return end
         self._connected = true
