@@ -143,7 +143,9 @@ end
 
 local function speciesId(directory, selected)
     if not text(selected) then error("Choose one conversion species by exact name or ID first.", 0) end
-    if type(directory[selected]) == "table" then return selected end
+    if type(directory[selected]) == "table" then return selected, directory[selected] end
+    local numeric = tonumber(selected)
+    if numeric and type(directory[numeric]) == "table" then return tostring(numeric), directory[numeric] end
     local found
     for id, definition in pairs(directory) do
         if type(definition) == "table" and type(definition.name) == "string" and definition.name:lower() == selected:lower() then
@@ -152,7 +154,35 @@ local function speciesId(directory, selected)
         end
     end
     if not found then error("No pet directory entry matches this species.", 0) end
-    return found
+    return found, directory[found] or directory[tonumber(found)]
+end
+
+function PetCare:NextChoice(kind, previous)
+    if self._destroyed or not samePlace() or not self._api then error("Load pet tools first.", 0) end
+    local choices = {}
+    local directory = if kind == "Egg" then self._api.eggs elseif kind == "Species" then self._api.pets else nil
+    if type(directory) ~= "table" then error("This directory is unavailable.", 0) end
+    for id, definition in pairs(directory) do
+        if type(definition) ~= "table" then continue end
+        local eligible
+        if kind == "Egg" then
+            eligible = definition.hatchable == true and not definition.disabled and not definition.isPremium
+                and text(definition.currency) and definition.currency:lower() ~= "robux" and number(definition.cost) and definition.cost > 0
+        else
+            eligible = text(definition.rarity) and not definition.isPremium and not definition.huge and not definition.titanic
+                and definition.rarity ~= "Exclusive" and definition.rarity ~= "Event"
+        end
+        if eligible and (text(id) or number(id)) then
+            table.insert(choices, { value = tostring(id), label = if kind == "Species" and text(definition.name)
+                then definition.name .. " (" .. tostring(id) .. ")" else tostring(id) })
+        end
+    end
+    table.sort(choices, function(a, b) return a.value < b.value end)
+    if #choices == 0 then error("No eligible entries are loaded in this directory.", 0) end
+    local index = 0
+    for i, choice in ipairs(choices) do if choice.value == previous then index = i; break end end
+    local nextChoice = choices[index % #choices + 1]
+    return nextChoice.value, nextChoice.label
 end
 
 local function unlockedSlot(playerGui, uid)
@@ -169,9 +199,8 @@ function PetCare:Convert(variant, selected, active)
     local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
     if not key then error("Choose Gold or Rainbow conversion.", 0) end
     return self:_run(key, active, function(current)
-        local id = speciesId(self._api.pets, selected)
+        local id, definition = speciesId(self._api.pets, selected)
         if not current() then return 0 end
-        local definition = self._api.pets[id]
         if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
         local premium = definition.isPremium or definition.huge or definition.titanic
             or definition.rarity == "Exclusive" or definition.rarity == "Event"

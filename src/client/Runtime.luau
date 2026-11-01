@@ -440,6 +440,13 @@ function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
     elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "NextEgg" or action == "NextSpecies" then
+        local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
+        local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])
+        local accepted, reason = self:SetOption(key, value)
+        if not accepted then return false, reason end
+        self.State.CareStatus = "Selected " .. caption
+        self:Publish()
     elseif action == "HatchOnce" then return self:StartCare("AutoHatch", true)
     elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
     elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
