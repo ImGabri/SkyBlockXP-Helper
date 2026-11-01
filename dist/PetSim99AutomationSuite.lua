@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.2",
+    Version = "0.7.3",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -20,7 +20,7 @@ return table.freeze({
         AutoCollectLootbags = false,
         WalkToTarget = false,
         FarmMode = "Nearest",
-        ModulePathMode = "Facade", -- Switch to Direct to test child ModuleScripts without the stalled facade.
+        ModulePathMode = "Direct", -- Live client loaded child modules; Facade remains a manual alternative.
         Area = "All",
         NameFilter = "",
         Radius = 200,
@@ -591,6 +591,7 @@ function Interface.mount(spec)
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
+    actionButton("Farm", "Inspect visible coin models (no network)", "InspectCoinModels")
     cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
@@ -1481,6 +1482,7 @@ function PetSim99:_report()
         .. "\nPetCmds exports: " .. (self._petExports or "not loaded")
         .. string.format("\nRequests only: %d pet farm dispatches; %d orb IDs; %d lootbag IDs. No collection/break confirmation is inferred.",
             self._counts.FarmDispatches, self._counts.OrbIds, self._counts.LootbagIds)
+        .. "\n" .. (self._localCoinReport or "Local coin inspection: not run")
 end
 
 function PetSim99:_block(message)
@@ -1539,7 +1541,7 @@ function PetSim99:_readSnapshot(probe, active)
     end
     local root = self:_root()
     if returned.n == 0 then
-        error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
+        error("Get Coins returned no values (returns=0; types=none). The legacy command supplied no coin dictionary even though the modules loaded. AutoFarm remains disabled; use Inspect visible coin models for a read-only check, not repeated network probes.", 0)
     end
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
@@ -1658,6 +1660,53 @@ function PetSim99:Inspect()
     return #issues == 0, if #issues == 0
         then "Local objects present. Run the separate compatibility check to test game protocol."
         else table.concat(issues, "; ")
+end
+
+-- Read-only client view. This never invokes a game module or sends remote requests.
+-- Coin models establish visible geometry, not server health, ownership or pet assignments.
+function PetSim99:InspectCoinModels()
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    if not coins or not coins:IsA("Folder") then
+        self._localCoinReport = "Local coin inspection: __THINGS.Coins folder unavailable."
+        self:_report()
+        return false, self._localCoinReport
+    end
+    local root
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local candidate = character and character:FindFirstChild("HumanoidRootPart")
+    if candidate and candidate:IsA("BasePart") and vector(candidate.Position) then root = candidate end
+    local models, markers, samples = 0, 0, {}
+    for _, item in ipairs(coins:GetChildren()) do
+        if item:IsA("Model") then
+            models += 1
+            local part = item:FindFirstChild("Coin") or item:FindFirstChild("POS")
+            if part and part:IsA("BasePart") and vector(part.Position) then
+                markers += 1
+                local distance = if root then (root.Position - part.Position).Magnitude else nil
+                table.insert(samples, { name = item.Name, marker = part.Name, distance = distance })
+            end
+        end
+    end
+    table.sort(samples, function(a, b)
+        if a.distance and b.distance and a.distance ~= b.distance then
+            return a.distance < b.distance
+        end
+        return tostring(a.name) < tostring(b.name)
+    end)
+    local rows = {}
+    for i = 1, math.min(#samples, 12) do
+        local item = samples[i]
+        table.insert(rows, tostring(item.name) .. " [" .. item.marker .. "]"
+            .. (if item.distance then string.format(" %.1f studs", item.distance) else " (no character root)"))
+    end
+    self._localCoinReport = string.format(
+        "Local coin inspection (read-only): loaded models=%d, valid position markers=%d, root=%s. No server metadata or farming compatibility inferred.\nSamples: %s",
+        models, markers, if root then "present" else "missing",
+        if #rows > 0 then table.concat(rows, ", ") else "none")
+    self:_report()
+    return true, self._localCoinReport
 end
 
 function PetSim99:Connect(active, mode)
@@ -2542,6 +2591,20 @@ function Runtime:InspectEnvironment()
     return ready, message
 end
 
+function Runtime:InspectCoinModels()
+    if not self.Alive then return false, "Suite unloaded." end
+    local ok, inspected, report = pcall(function() return self.Adapter:InspectCoinModels() end)
+    if not ok then
+        report, inspected = tostring(inspected), false
+    end
+    self.State.Status = if inspected
+        then "Local coin models inspected; farming still requires a verified protocol"
+        else "Local coin inspection unavailable"
+    if not inspected then self.State.LastError = tostring(report) end
+    self:Publish()
+    return inspected, report
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
@@ -2594,6 +2657,7 @@ function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
+    elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"

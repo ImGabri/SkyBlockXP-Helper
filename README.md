@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.2**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.3**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.2. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.3. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -28,15 +28,32 @@ local movement, lighting and menu states owned by the suite.
 If the diagnostic report stops at `Loading ReplicatedStorage.Library ModuleScript`,
 the place may still be correct. Do **not** increase the timeout or repeatedly
 run the hanging native call. Rejoin the Classic Event in a fresh client, then
-choose **Farm → Module path → Direct** before running the compatibility check.
+use the default **Farm → Module path → Direct** for any manual compatibility check.
 For pet tools choose Direct the same way before clicking **Load pet tools**.
 Direct mode tries the existing `Library.Client.Network`,
 `Library.Client.PetCmds`, `Library.Client.Save`, and `Library.Directory`
 ModuleScripts individually and reports the exact module that stalls.
 It does not fall back automatically from a hung facade or guess remotes.
 Neither module access method is guaranteed to work in the live client.
-The default **Facade** path remains available for reproducibility. To
+The original **Facade** path remains available for reproducibility. To
 switch modes after a successful load, rejoin first.
+
+## v0.7.3: proven module loading, unsupported legacy Get Coins response
+
+Live user diagnostics now confirm that Direct mode loads Network and PetCmds
+successfully, but Network.Invoke("Get Coins") returns zero values. An earlier
+in-game console showed a caller-script assertion for this legacy command.
+There is no verified game contract for obtaining a coin dictionary through the
+current event. **The suite does not fabricate a response or send repeated guesses
+to unnamed RemoteEvents.** AutoFarm stays disabled after the failed compatibility
+check. The Farm tab now includes **Inspect visible coin models (no network)**:
+it reports locally loaded model/position-marker counts and up to 12 examples,
+without requiring modules or contacting the server. This is diagnostic only,
+not a replacement coin protocol.
+
+Pet tools are **independent of Get Coins**. With Direct selected, try **Pets →
+Load pet tools** separately and copy diagnostics; supported API loading,
+hatching, and conversions must each be validated in-game before trusting them.
 
 ## Eggs, gold and rainbow
 

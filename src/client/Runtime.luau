@@ -493,6 +493,20 @@ function Runtime:InspectEnvironment()
     return ready, message
 end
 
+function Runtime:InspectCoinModels()
+    if not self.Alive then return false, "Suite unloaded." end
+    local ok, inspected, report = pcall(function() return self.Adapter:InspectCoinModels() end)
+    if not ok then
+        report, inspected = tostring(inspected), false
+    end
+    self.State.Status = if inspected
+        then "Local coin models inspected; farming still requires a verified protocol"
+        else "Local coin inspection unavailable"
+    if not inspected then self.State.LastError = tostring(report) end
+    self:Publish()
+    return inspected, report
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
@@ -545,6 +559,7 @@ function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
+    elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"

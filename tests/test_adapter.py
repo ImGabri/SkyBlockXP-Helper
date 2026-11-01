@@ -398,6 +398,18 @@ local snapshot = adapter:Snapshot()
 assert(adapter.Supported.AutoFarm and #snapshot.Candidates == 1, "stale facade replaced current area filtering")
 ''')
 
+    def test_local_coin_inspector_reads_models_without_modules_or_network(self):
+        self.run_case('''
+local adapter = PetSim99.new()
+local ok, report = adapter:InspectCoinModels()
+assert(ok and string.find(report, "loaded models=1", 1, true), report)
+contains(report, "valid position markers=1")
+contains(report, "coin1 [Coin]")
+assert(nativeCalls == 0 and #calls == 0, "local inspector attempted a module or remote call")
+assert(not adapter.Supported.AutoFarm, "read-only inspection enabled farming without protocol")
+contains(adapter.Report, "Local coin inspection")
+''')
+
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
         for change in ["game.PlaceId = 1", "game.GameId = 1"]:
             with self.subTest(change=change):
