@@ -172,3 +172,32 @@ compilation and mocked-boundary checks do not establish Solara support.
    hatching or conversions. Current reported native probe acceptance is FAILED.
 4. Verify actual game-side actions, rewards, cancellation, respawn and cleanup
    in the client. Local fixture tests establish only local code guarantees.
+
+## v0.5 public library and original loader
+
+The user's diagnostics identify `ReplicatedStorage.Library` as a ModuleScript,
+not just a folder. The pinned Cypaex reference obtains its library through
+`require(ReplicatedStorage.Library)` and uses its Network/PetCmds fields. This is
+evidence for the public entry point; that reference also modifies private
+networking, so it is not evidence that the unmodified entry fixes today's guard.
+
+The [UNC script API, pinned to 305c31e](https://github.com/unified-naming-convention/NamingStandard/blob/305c31e4f469c056812c9f412c9a4d78293021bc/api/scripts.md)
+defines `getrenv()` at line73 and explicitly demonstrates
+`getrenv().require(module)` at line167. Its example contrasts the original loader
+with a separately regenerated module closure. This documents an ordinary game
+loader candidate. It does not establish current Solara support, that the old
+loader actually regenerated this game's modules, or that the caller assertion
+will accept the same caller under another loader.
+
+Version0.5 selects that original loader when exposed, otherwise ordinary require,
+and loads the public Library ModuleScript. It uses direct child modules only for
+legacy folder-only layouts. A failed public facade is never retried through
+private client networking. Proxy-backed Network methods are explicitly included
+in diagnostics even when raw table enumeration is empty. No returned scalar
+values, inventory records or module source are dumped.
+
+Local fixtures verify loader selection, public module dispatch, strict rejection,
+empty proxy enumeration and cancellation/reconnect isolation, including a lazy
+getter that reenters Connect. **No v0.5 live result exists yet.** The last executed
+target check remains the failed v0.4 direct-client-module route. Hatching from
+anywhere and conversions still lack a verified current integration.

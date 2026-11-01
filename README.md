@@ -7,12 +7,20 @@ The user's in-event client log shows **place `85920622393590`**, universe
 `3317771874`. Discovery now compares against that observed destination. This
 identifies the reported event place, but does not establish its farming APIs.
 
-**Version 0.4 improves reliability; it does not fix the game's rejected native
-coin route.** The user's v0.3.1 screenshot shows `returns=0; types=none` from
+**Version 0.5 changes module resolution; live compatibility still needs checking.**
+The user's earlier screenshot shows `returns=0; types=none` from
 Get Coins. Their client log contains repeated Network._check warnings mentioning
 getgenv on Get Stats. The later log also contains a direct callerScript assertion
-failure for Get Coins. The current native route supplies no usable coin data in
-that session; the public legacy commands do not fix its caller validation.
+failure for Get Coins. The previous direct-client-module route supplied no usable
+coin data in that session.
+
+The new build uses the original game loader, `getrenv().require`, when the
+executor provides it, and resolves Network/PetCmds through the public
+`ReplicatedStorage.Library` module. This avoids explicitly loading the internal
+client helpers. The selected loader/provider are included in diagnostics. If the
+public entry fails, the build reports that failure without retrying the rejected
+private route. This is a documented compatibility candidate, not evidence that
+the game's caller validation now accepts it. No game check is modified.
 
 Startup is now passive: loading the UI does not require game ModuleScripts or
 send a coin probe. The compatibility check is an explicit action. A canceled
@@ -25,7 +33,7 @@ retries rather than pretending an in-flight request has disappeared.
 | Feature | Current evidence |
 | --- | --- |
 | UI/local movement/lighting controls | Implemented; UI loads in the user's client. |
-| Experimental pet/nearby-pickup commands | Implemented, but the reported native coin probe fails. |
+| Experimental pet/nearby-pickup commands | Implemented; v0.5 public-library route is unverified in game. The older direct route failed. |
 | Map-wide farming | No working current Classic Event backend verified. |
 | Hatch from anywhere | Not implemented or verified. |
 | Auto-gold / auto-rainbow | Not implemented or verified. |
@@ -52,6 +60,8 @@ the adapter. Diagnostics report count/types, not returned scalar contents.
 - Nearest/weakest/strongest priorities, area/radius/name filtering. Health-based
   modes require actual health data from the current response; use Nearest if absent.
 - Cooperative cancellation on disable, timeout and respawn; no retry while an uncancellable request remains active.
+- Original-loader/public-library resolution, including lazy proxies; canceled
+  module lookups stop and stale work cannot overwrite a newer connection.
 - Reentrant timeout callbacks cannot crash the scheduler or expire replacement jobs.
 - Viewport/collapse resizing keeps Stop and Unload controls reachable.
 - Self-contained executor script; native Roblox UI with Farm, Misc and Status
@@ -64,8 +74,8 @@ the adapter. Diagnostics report count/types, not returned scalar contents.
   and request counters. Counters measure requests, not confirmed breaks/rewards.
 - Timeout/cancellation job handling and a reproducible standalone bundler.
 
-All toggles start off. The user confirmed the UI loads, but the v0.3.1 coin
-probe **failed**. Current farming/collection compatibility remains unverified. Movement changes may be
+All toggles start off. The user confirmed the UI loads, but the previous coin
+probe **failed**. The changed v0.5 farming/collection route has no live result yet. Movement changes may be
 overridden by the game. Idle input and clipboard operations are optional and
 report failure when rejected by the executor.
 
@@ -74,7 +84,8 @@ report failure when rejected by the executor.
 The file to execute is **[`dist/PetSimAutomation.lua`](dist/PetSimAutomation.lua)**.
 
 1. Enter the Classic Event, equip pets and stand beside loaded coins.
-2. Open the file, copy its complete contents into Solara and execute.
+2. Rejoin first if an older build caused network-warning spam. Open the file,
+   copy its complete contents into Solara and execute. Confirm the title shows v0.5.0.
 3. The UI starts idle. Farm → **Run compatibility check** is a manual native-interface test, not a farming command. If it returns no values, stop retrying that route; use **Status → Copy diagnostics**.
 4. Only after a successful probe, continue with the experimental controls.
 5. In Farm, start with Nearest priority and enable Auto farm. Enable collection
@@ -85,7 +96,9 @@ Use the complete standalone file from `dist/`; the source modules do not need
 to be downloaded separately.
 It needs no remotely loaded UI library, hook/debug API, API key or file-writing
 permission. It does not download or execute other scripts. It does require native
-access to the game's concrete client ModuleScripts; Solara may reject that access.
+access to the game's public Library module; Solara may reject that access.
+If `getrenv().require` is unavailable, ordinary `require` is used and reported;
+if the selected loader fails, its error is surfaced rather than silently retried.
 
 To help identify the event, open **Status → Copy diagnostics**. If clipboard
 support is unavailable, the report is printed to the console. The report includes
@@ -136,7 +149,8 @@ Studio place cannot validate the Classic Event's internals or Solara support.
 
 Research and compatibility evidence: [`docs/research.md`](docs/research.md).
 
-ECC test-first evidence: [`docs/releases/0.4.0/ecc-tdd.md`](docs/releases/0.4.0/ecc-tdd.md).
+ECC test-first evidence: [`v0.5 module resolution`](docs/releases/0.5.0/ecc-tdd.md)
+and [`v0.4 stability`](docs/releases/0.4.0/ecc-tdd.md).
 
 To copy the retained client console without touching game modules, execute
 [`dist/CopyClientConsole.lua`](dist/CopyClientConsole.lua). It copies locally;
