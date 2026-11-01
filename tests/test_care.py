@@ -138,6 +138,19 @@ for _, uid in ipairs(args[1]) do
 end
 ''')
 
+    def test_conversion_readiness_checks_batch_without_sending_or_reserving_pets(self):
+        self.run_case('''
+care:Connect()
+assert(type(care.CanConvert) == "function", "conversion readiness missing")
+assert(care:CanConvert("Gold", "cat"))
+assert(#calls == 0, "readiness sent a conversion request")
+assert(care:Convert("Gold", "cat") == 1)
+assert(care:Convert("Gold", "cat") == 1)
+assert(not care:CanConvert("Gold", "cat"))
+assert(not care:CanConvert("Gold", "cat", function() return false end))
+assert(#calls == 2)
+''')
+
     def test_no_selected_species_no_batch_and_protected_pets_are_not_consumed(self):
         for field in ["l", "lk", "locked", "favorite", "fav", "hc", "sh", "dm"]:
             with self.subTest(field=field):

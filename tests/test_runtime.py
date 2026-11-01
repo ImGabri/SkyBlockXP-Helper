@@ -175,6 +175,9 @@ function care:Convert(variant, species, active)
     self.Counts[variant .. "Requests"] += 1
     return 1
 end
+function care:CanConvert(variant, species, active)
+    return self.HasBatch ~= false and (not active or active())
+end
 function care:OpenMenu(kind) self.MenuCalls += 1; self.LastMenu = kind; return true end
 function care:NextChoice(kind, previous)
     return if kind == "Egg" then "Starter Egg" else "cat", "Chosen from loaded directory"
@@ -285,6 +288,16 @@ contains(runtime.State.LastError, "machine path is blocked")
 navigationHook = nil
 assert(runtime:Action("GoldOnce"))
 assert(navigation.Calls == 2 and navigation.LastVariant == "Gold" and care.ConvertCalls == 1)
+runtime:Destroy()
+''')
+
+    def test_no_eligible_six_pet_batch_never_starts_a_machine_journey(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("ConversionSpecies", "Cat")
+care.HasBatch = false
+assert(runtime:Action("GoldOnce"))
+assert(navigation.Calls == 0 and care.ConvertCalls == 0, "walk started without an eligible six-pet batch")
 runtime:Destroy()
 ''')
 
