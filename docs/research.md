@@ -68,6 +68,23 @@ responses enable experimental features. A rejection or schema mismatch disables
 the adapter; it never falls back to generic RemoteEvents or a bypass. This is
 an executable compatibility probe, **not a completed live-event validation**.
 
+## First live probe and return-value handling
+
+The user's v0.3 screenshot confirms that the UI loads and the probe reaches the
+Get Coins response check, where its first return is not a table. It does not
+establish whether the command returned nil, a status flag, or another type.
+The UI's zero equipped-pet count is a default: this failure happens before the
+equipped-pet read, so it does not mean the user has no equipped pets.
+
+Code review found that the pcall wrapper kept only one return value. Version
+0.3.1 fixes this independently demonstrated bug and accepts either a direct
+dictionary or an exact true-plus-dictionary tuple after strict loaded-coin
+validation. No source reviewed proves that the live event uses that tuple.
+Nil, zero returns, false status and malformed values remain blocked. Diagnostics
+show only response count/types, plus exported API names/arities; successful
+scalar payload contents are not dumped. A new live run is required to diagnose
+the actual event response rather than assuming the screenshot's cause.
+
 ## Solara compatibility evidence
 
 There is no authoritative, current Solara capability matrix in the sources

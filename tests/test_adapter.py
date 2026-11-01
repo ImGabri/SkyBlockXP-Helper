@@ -178,6 +178,81 @@ contains(adapter.Reason, "Native require")
 contains(adapter.Reason, "Fixture denied native module access")
 ''')
 
+    def test_network_call_preserves_tuple_slots_and_return_count(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+network.Invoke = function(command)
+    if command == "Tuple Fixture" then return "head", nil, false, 7, nil end
+    if command == "Empty Fixture" then return end
+    error("Unexpected fixture command")
+end
+local values = table.pack(adapter:_call("Invoke", "Tuple Fixture"))
+assert(values.n == 5, "network call discarded tuple return slots")
+assert(values[1] == "head" and values[2] == nil and values[3] == false and values[4] == 7 and values[5] == nil)
+assert(table.pack(adapter:_call("Invoke", "Empty Fixture")).n == 0, "empty response was converted into one nil return")
+''')
+
+    def test_true_status_plus_valid_coin_dictionary_unlocks_probe(self):
+        self.run_case('''
+local invoke = network.Invoke
+network.Invoke = function(command, ...)
+    local result = invoke(command, ...)
+    if command == "Get Coins" then return true, result end
+    return result
+end
+local adapter = PetSim99.new():Connect()
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+local snapshot = adapter:Snapshot()
+assert(#snapshot.Candidates == 1 and snapshot.Candidates[1].id == "coin1")
+assert(#snapshot.Pets == 2 and snapshot.HealthKnown)
+assert(#calls == 2 and calls[1].command == "Get Coins" and calls[2].command == "Get Coins")
+''')
+
+    def test_true_status_does_not_bypass_coin_schema_validation(self):
+        self.run_case('''
+network.Invoke = function(command)
+    assert(command == "Get Coins")
+    return true, { coin1 = { p=Vector3.new(10,0,0), a="Spawn", n="Coin", health="not-a-number" } }
+end
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+contains(adapter.Reason, "unknown coin schema")
+''')
+
+    def test_unsupported_coin_tuples_report_return_count_and_types(self):
+        cases = [
+            ("return", 0, "none"),
+            ("return nil", 1, "nil"),
+            ('return "private fixture payload"', 1, "string"),
+            ("return true", 1, "boolean"),
+            ("return nil, records", 2, "nil,table"),
+            ('return true, records, "extra"', 3, "boolean,table,string"),
+        ]
+        for response, count, types in cases:
+            with self.subTest(response=response):
+                self.run_case('''
+network.Invoke = function(command)
+    assert(command == "Get Coins")
+    ''' + response + '''
+end
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+contains(adapter.Reason, "returns=''' + str(count) + '''")
+contains(adapter.Reason, "types=''' + types + '''")
+assert(not string.find(adapter.Reason, "private fixture payload", 1, true), "diagnostics exposed response contents")
+''')
+
+    def test_false_status_with_coin_payload_is_explicitly_rejected(self):
+        self.run_case('''
+network.Invoke = function(command)
+    assert(command == "Get Coins")
+    return false, records
+end
+local adapter = PetSim99.new():Connect()
+assertBlocked(adapter)
+contains(adapter.Reason, "explicitly rejected")
+''')
+
     def test_empty_malformed_and_wrapped_coin_records_are_rejected(self):
         for replacement in [
             "7", "{}", "{ data = records }",
@@ -388,6 +463,25 @@ invokeHook = function(command)
 end
 assert(not pcall(adapter.Snapshot, adapter))
 assert(adapter.Supported.AutoFarm, "old snapshot disabled the newer connection")
+''')
+
+    def test_late_coin_reply_cannot_overwrite_new_connection_response_metadata(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+local invoke = network.Invoke
+local oldRequestPending = true
+network.Invoke = function(command, ...)
+    if command == "Get Coins" and oldRequestPending then
+        oldRequestPending = false
+        adapter:Connect()
+        return nil
+    end
+    return invoke(command, ...)
+end
+assert(not pcall(adapter.Snapshot, adapter), "old snapshot should be canceled after reconnect")
+assert(adapter.Supported.AutoFarm, "old reply disabled the newer connection")
+contains(adapter._coinResponse, "returns=1")
+contains(adapter._coinResponse, "types=table")
 ''')
 
     def test_late_assignment_failure_cannot_disable_a_new_connection(self):

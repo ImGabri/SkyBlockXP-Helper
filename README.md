@@ -18,6 +18,13 @@ loaded coin models before farming controls become available. Unknown responses,
 rejected calls or inaccessible modules leave/return the adapter to an unavailable
 state. No hook, private-upvalue extraction or authentication bypass is included.
 
+Version 0.3.1 preserves every network return value, including nil slots. A direct
+coin dictionary or an exact `(true, dictionary)` response must pass the same
+strict coin checks. Unsupported replies now show their return count and types
+in Status; Copy diagnostics also includes module export names/function arities.
+The user's first live run reached the UI but failed the original coin-response
+check. That screenshot does not reveal the response type or confirm the cause.
+
 ## Implemented
 
 - Pet auto-farm requests with all equipped pet UIDs, per-pet pacing, target

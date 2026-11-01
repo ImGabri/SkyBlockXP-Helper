@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.3.0",
+    Version = "0.3.1",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -706,6 +706,29 @@ local function requireModule(module, path)
     return value
 end
 
+local function responseSummary(result)
+    local types = {}
+    for index = 1, result.n do table.insert(types, typeof(result[index])) end
+    return "returns=" .. tostring(result.n) .. "; types=" .. (if #types > 0 then table.concat(types, ",") else "none")
+end
+
+local function exportSummary(exports)
+    local names = {}
+    for name, value in pairs(exports) do
+        if type(name) == "string" then
+            local shape = typeof(value)
+            if type(value) == "function" and debug and type(debug.info) == "function" then
+                local ok, count, variadic = pcall(debug.info, value, "a")
+                if ok then shape ..= "(args=" .. tostring(count) .. ",variadic=" .. tostring(variadic) .. ")" end
+            end
+            table.insert(names, name .. ":" .. shape)
+        end
+    end
+    table.sort(names)
+    while #names > 40 do table.remove(names) end
+    return table.concat(names, ", ")
+end
+
 local function physicalPosition(instance)
     if instance:IsA("BasePart") then return instance.Position end
     if instance:IsA("Model") then
@@ -728,6 +751,9 @@ end
 
 function PetSim99:_report()
     self.Report = (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
+        .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
+        .. "\nPetCmds exports: " .. (self._petExports or "not loaded")
         .. string.format("\nRequests only: %d pet farm dispatches; %d orb IDs; %d lootbag IDs. No collection/break confirmation is inferred.",
             self._counts.FarmDispatches, self._counts.OrbIds, self._counts.LootbagIds)
 end
@@ -755,22 +781,33 @@ function PetSim99:_root()
 end
 
 function PetSim99:_call(method, command, ...)
-    local ok, result = pcall(self._network[method], command, ...)
-    if not ok then
-        error(command .. " failed: " .. tostring(result)
+    local generation = self._generation
+    local outcome = table.pack(pcall(self._network[method], command, ...))
+    if not outcome[1] then
+        error(command .. " failed: " .. tostring(outcome[2])
             .. ". The event protocol or module access may differ; no bypass is attempted.", 0)
     end
-    if result == false then error(command .. " was explicitly rejected by the game.", 0) end
-    return result
+    local result = table.pack(table.unpack(outcome, 2, outcome.n))
+    if command == "Get Coins" and generation == self._generation and not self._destroyed then
+        self._coinResponse = responseSummary(result)
+    end
+    if result[1] == false then error(command .. " was explicitly rejected by the game.", 0) end
+    return table.unpack(result, 1, result.n)
 end
 
 function PetSim99:_readSnapshot(probe)
     local generation = self._generation
-    local records = self:_call("Invoke", "Get Coins")
+    local returned = table.pack(self:_call("Invoke", "Get Coins"))
+    local records = returned[1]
+    -- Status+payload responses must pass the same concrete coin validation.
+    if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
+        records = returned[2]
+    end
     if generation ~= self._generation or self._destroyed then error("Coin read canceled by reconnect or unload.", 0) end
     local root = self:_root()
     if type(records) ~= "table" then
-        error("Get Coins returned an unsupported response; expected a dictionary of coin records.", 0)
+        error("Get Coins returned an unsupported response (" .. responseSummary(returned)
+            .. "); expected a coin dictionary or true plus a coin dictionary. A nil/empty reply does not establish compatibility.", 0)
     end
     if probe and next(records) == nil then
         error("Get Coins returned no records. Stand near loaded Classic Event coins and reconnect.", 0)
@@ -839,6 +876,7 @@ function PetSim99:Connect()
     self.Supported = supportedNone()
     self._network, self._petCmds, self._world, self._coins, self._things = nil, nil, nil, nil, nil
     self._assigned = {}
+    self._coinResponse, self._networkExports, self._petExports = nil, nil, nil
     self._cooldowns = setmetatable({}, { __mode = "k" })
     local matches = game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId
     local storage = game:GetService("ReplicatedStorage")
@@ -875,6 +913,8 @@ function PetSim99:Connect()
         local petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds")
         if generation ~= self._generation or self._destroyed then return end
         self._network, self._petCmds = network, petCmds
+        self._networkExports = exportSummary(network)
+        self._petExports = exportSummary(petCmds)
         if type(self._network.Invoke) ~= "function" or type(self._network.Fire) ~= "function" then
             error(networkPath .. " lacks Invoke/Fire functions; this protocol is unsupported.", 0)
         end
