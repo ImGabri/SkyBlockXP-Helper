@@ -27,6 +27,7 @@ local defaults = {
     EggName = "",
     HatchMode = "Single",
     HatchInterval = 2,
+    EggTravelMode = "Walk",
     AutoHatch = false,
     ConversionSpecies = "",
     ConversionInterval = 3,
@@ -485,6 +486,8 @@ function Interface.mount(spec)
     actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
     input("Pets", "Hatch interval (seconds)", "HatchInterval", 1, 30)
+    cycle("Pets", "Egg travel", "EggTravelMode", { "Walk", "Off" })
+    actionButton("Pets", "Go to selected egg", "GoSelectedEgg")
     actionButton("Pets", "Open egg once", "HatchOnce")
     toggle("Pets", "Auto hatch", "AutoHatch")
     actionButton("Pets", "Open egg menu", "OpenEggMenu")
