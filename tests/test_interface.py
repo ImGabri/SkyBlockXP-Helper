@@ -81,7 +81,7 @@ class InterfaceTests(unittest.TestCase):
 local ui = Interface.mount({parent={}, name="Suite", version="test", options={}, onChange=function() return true end, onAction=function() end})
 local gui, panel
 for _, object in ipairs(records) do
-    if object.Name == "PetSimAutomationUi" then gui = object end
+    if object.Name == "PetSim99AutomationSuiteUi" then gui = object end
     if object.Name == "Panel" then panel = object end
 end
 panel.Position = UDim2.fromOffset(1000, 700)
@@ -100,7 +100,7 @@ ui:Destroy()
 local ui = Interface.mount({parent={}, onChange=function() return true end, onAction=function() end})
 local gui, panel
 for _, object in ipairs(records) do
-    if object.Name == "PetSimAutomationUi" then gui = object end
+    if object.Name == "PetSim99AutomationSuiteUi" then gui = object end
     if object.Name == "Panel" then panel = object end
 end
 gui.AbsoluteSize = { X=600, Y=480 }
@@ -115,4 +115,117 @@ for _, connection in ipairs(allConnections) do assert(not connection.Connected, 
 local oldPosition = panel.Position
 gui:GetPropertyChangedSignal("AbsoluteSize"):Fire()
 assert(panel.Position == oldPosition)
+''')
+
+    def test_four_tabs_include_pet_controls_and_fit_the_available_width(self):
+        self.run_case('''
+local ui = Interface.mount({parent={}, onChange=function() return true end, onAction=function() return true end})
+local tabs = {}
+for _, object in ipairs(records) do
+    if object.ClassName == "TextButton" and table.find({"Farm", "Pets", "Misc", "Status"}, object.Name) then
+        tabs[object.Name] = object
+    end
+end
+for index, name in ipairs({"Farm", "Pets", "Misc", "Status"}) do
+    local tab = tabs[name]
+    assert(tab, "Missing " .. name .. " tab")
+    assert(tab.LayoutOrder == index, "Incorrect tab order")
+    assert(tab.Size.X.Scale == 0.25 and tab.Size.X.Offset == -4.5, "Four tabs overflow the tab bar")
+end
+tabs.Pets.Activated:Fire()
+for _, object in ipairs(records) do
+    if object.ClassName == "ScrollingFrame" then assert(object.Visible == (object.Name == "Pets")) end
+end
+ui:Destroy()
+''')
+
+    def test_pet_actions_dispatch_exact_names_and_stop_after_destroy(self):
+        self.run_case('''
+local dispatched = {}
+local ui = Interface.mount({parent={}, onChange=function() return true end, onAction=function(name)
+    table.insert(dispatched, name)
+    return true
+end})
+local expected = {
+    ["Load pet tools"]="PrepareCare", ["Open egg once"]="HatchOnce",
+    ["Convert 6 to gold"]="GoldOnce", ["Convert 6 gold to rainbow"]="RainbowOnce",
+    ["Open egg menu"]="OpenEggMenu", ["Open gold menu"]="OpenGoldMenu",
+    ["Open rainbow menu"]="OpenRainbowMenu", ["Open inventory"]="OpenInventory",
+    ["Clear status error"]="ClearError",
+}
+local buttons = {}
+for caption, actionName in pairs(expected) do
+    local found
+    for _, object in ipairs(records) do
+        if object.ClassName == "TextButton" and object.Text == caption then found = object end
+    end
+    assert(found, "Missing action: " .. caption)
+    found.Activated:Fire()
+    assert(dispatched[#dispatched] == actionName, "Incorrect action: " .. caption)
+    table.insert(buttons, found)
+end
+local count = #dispatched
+ui:Destroy()
+for _, button in ipairs(buttons) do button.Activated:Fire() end
+assert(#dispatched == count, "Destroyed UI still invokes pet actions")
+''')
+
+    def test_pet_inputs_and_toggles_obey_canonical_snapshots_and_capabilities(self):
+        self.run_case('''
+local changes = {}
+local ui
+ui = Interface.mount({parent={}, options={EggName="Cracked Egg", HatchMode="Single"}, onChange=function(key, value)
+    table.insert(changes, {key, value})
+    if key == "AutoRainbow" then
+        ui:Update({Options={AutoRainbow=false}, Supported={AutoRainbow=true}})
+    end
+    return true
+end, onAction=function() return true end})
+local function control(caption, className)
+    local frame
+    for _, object in ipairs(records) do
+        if object.ClassName == "TextLabel" and object.Text == caption then frame = object.Parent end
+    end
+    assert(frame, "Missing control row: " .. caption)
+    for _, object in ipairs(records) do
+        if object.Parent == frame and object.ClassName == className then return object end
+    end
+    error("Missing control: " .. caption)
+end
+local egg = control("Egg name", "TextBox")
+assert(egg.Text == "Cracked Egg")
+egg.Text = "Spotted Egg"
+egg.FocusLost:Fire()
+assert(changes[#changes][1] == "EggName" and changes[#changes][2] == "Spotted Egg")
+local mode = control("Hatch mode", "TextButton")
+mode.Activated:Fire()
+assert(changes[#changes][1] == "HatchMode" and changes[#changes][2] == "Triple")
+local rainbow = control("Auto rainbow (6 gold pets)", "TextButton")
+rainbow.Activated:Fire()
+assert(changes[#changes][1] == "AutoRainbow" and changes[#changes][2] == true)
+assert(rainbow.Text == "OFF", "Raw toggle input replaced canonical snapshot")
+ui:Update({Options={AutoRainbow=false}, Supported={AutoRainbow=false}})
+local before = #changes
+rainbow.Activated:Fire()
+assert(rainbow.Text == "UNAVAILABLE" and #changes == before, "Unavailable pet feature was enabled")
+local interval = control("Hatch interval (seconds)", "TextBox")
+interval.Text = "0"
+interval.FocusLost:Fire()
+assert(#changes == before, "Out-of-range hatch interval reached runtime")
+ui:Destroy()
+''')
+
+    def test_status_reports_pet_requests_and_care_result_without_success_claims(self):
+        self.run_case('''
+local ui = Interface.mount({parent={}, onChange=function() return true end, onAction=function() return true end})
+ui:Update({CareStatus="Waiting for six eligible pets", HatchRequests=2, GoldRequests=3, RainbowRequests=4})
+local details
+for _, object in ipairs(records) do
+    if object.ClassName == "TextLabel" and object.Parent and object.Parent.Name == "Status" then details = object.Text end
+end
+assert(details and string.find(details, "Waiting for six eligible pets", 1, true), "Care status missing")
+for _, caption in ipairs({"Egg requests: 2", "Gold requests: 3", "Rainbow requests: 4"}) do
+    assert(string.find(details, caption, 1, true), "Missing request counter: " .. caption)
+end
+ui:Destroy()
 ''')
