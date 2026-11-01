@@ -186,6 +186,53 @@ assert(#calls == 0, "canceled snapshot sent a new Get Coins request")
 assert(adapter.Supported.AutoFarm, "canceled read poisoned the current adapter")
 ''')
 
+    def test_cancel_during_network_module_load_does_not_require_pet_module(self):
+        self.run_case('''
+local live = true
+local native = require
+require = function(module)
+    local value = native(module)
+    if module == networkModule then live = false end
+    return value
+end
+local adapter = PetSim99.new():Connect(function() return live end)
+assertBlocked(adapter)
+assert(nativeCalls == 1, "canceled connect required another game module")
+assert(#calls == 0)
+''')
+
+    def test_canceled_join_error_does_not_poison_the_current_connection(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+local snapshot = adapter:Snapshot()
+local live = true
+invokeHook = function(command)
+    if command == "Join Coin" then
+        live = false
+        error("canceled native request ended late")
+    end
+end
+local ok, count = pcall(adapter.Assign, adapter, snapshot.Candidates[1], snapshot.Pets, function() return live end)
+assert(ok and count == 0, "canceled join error escaped")
+assert(adapter.Supported.AutoFarm, "canceled join error disabled the current connection")
+''')
+
+    def test_canceled_pickup_error_does_not_poison_the_current_connection(self):
+        self.run_case('''
+local adapter = PetSim99.new():Connect()
+part("orb-one", Vector3.new(1, 0, 0), orbs)
+local live = true
+fireHook = function(command)
+    if command == "Claim Orbs" then
+        live = false
+        error("canceled native pickup ended late")
+    end
+end
+local ok, count = pcall(adapter.Collect, adapter, "orbs", 30, function() return live end)
+assert(ok and count == 0, "canceled pickup error escaped")
+assert(adapter.Supported.AutoFarm, "canceled pickup error disabled the current connection")
+''')
+
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
         for change in ["game.PlaceId = 1", "game.GameId = 1"]:
             with self.subTest(change=change):
