@@ -7,23 +7,40 @@ The user's in-event client log shows **place `85920622393590`**, universe
 `3317771874`. Discovery now compares against that observed destination. This
 identifies the reported event place, but does not establish its farming APIs.
 
-**Version 0.3 includes an experimental, guarded farming adapter.** The user's
-in-game diagnostic matches a legacy PSX-style client layout: Library.Client
-PetCmds/Network and __THINGS Coins/Orbs/Lootbags. Interface facts from a readable
-legacy reference informed an original adapter; that is not proof of current
-Classic Event or Solara compatibility.
+**Version 0.4 improves reliability; it does not fix the game's rejected native
+coin route.** The user's v0.3.1 screenshot shows `returns=0; types=none` from
+Get Coins. Their client log contains repeated Network._check warnings mentioning
+getgenv on Get Stats. The later log also contains a direct callerScript assertion
+failure for Get Coins. The current native route supplies no usable coin data in
+that session; the public legacy commands do not fix its caller validation.
 
-On connection, native game modules must load and a Get Coins response must match
-loaded coin models before farming controls become available. Unknown responses,
-rejected calls or inaccessible modules leave/return the adapter to an unavailable
-state. No hook, private-upvalue extraction or authentication bypass is included.
+Startup is now passive: loading the UI does not require game ModuleScripts or
+send a coin probe. The compatibility check is an explicit action. A canceled
+worker cannot issue follow-up requests, and a native request that cannot be
+canceled keeps its slot occupied until it exits. This prevents overlapping
+retries rather than pretending an in-flight request has disappeared.
 
-Version 0.3.1 preserves every network return value, including nil slots. A direct
-coin dictionary or an exact `(true, dictionary)` response must pass the same
-strict coin checks. Unsupported replies now show their return count and types
-in Status; Copy diagnostics also includes module export names/function arities.
-The user's first live run reached the UI but failed the original coin-response
-check. That screenshot does not reveal the response type or confirm the cause.
+**Requested feature status**
+
+| Feature | Current evidence |
+| --- | --- |
+| UI/local movement/lighting controls | Implemented; UI loads in the user's client. |
+| Experimental pet/nearby-pickup commands | Implemented, but the reported native coin probe fails. |
+| Map-wide farming | No working current Classic Event backend verified. |
+| Hatch from anywhere | Not implemented or verified. |
+| Auto-gold / auto-rainbow | Not implemented or verified. |
+| Executor-free input macro | Would require a visible recorded route; it cannot replace remote map-wide/hatching capabilities. |
+
+After the network update, the rscripts.net index and official BIG Games posts
+were accessed successfully. Relevant legacy sources and their limits are recorded
+in docs/research.md. YouTube still returned HTTP403; no video was watched or
+offered as compatibility proof.
+
+The experimental adapter uses interface facts from a readable legacy PSX
+reference. On a manual check, modules and coin replies must match strict,
+loaded-model validation. Only a single coin dictionary or exactly
+`(true, dictionary)` is accepted; false, empty, malformed and extra values block
+the adapter. Diagnostics report count/types, not returned scalar contents.
 
 ## Implemented
 
@@ -34,7 +51,9 @@ check. That screenshot does not reveal the response type or confirm the cause.
 - Optional walking toward a selected farm target; no automatic teleporting.
 - Nearest/weakest/strongest priorities, area/radius/name filtering. Health-based
   modes require actual health data from the current response; use Nearest if absent.
-- Respawn cancellation, timeouts and explicit stop-on-protocol-failure behavior.
+- Cooperative cancellation on disable, timeout and respawn; no retry while an uncancellable request remains active.
+- Reentrant timeout callbacks cannot crash the scheduler or expire replacement jobs.
+- Viewport/collapse resizing keeps Stop and Unload controls reachable.
 - Self-contained executor script; native Roblox UI with Farm, Misc and Status
   tabs, mouse/touch dragging, collapse and Right Control to hide/show.
 - Client movement settings with original-value restoration, including games
@@ -45,8 +64,8 @@ check. That screenshot does not reveal the response type or confirm the cause.
   and request counters. Counters measure requests, not confirmed breaks/rewards.
 - Timeout/cancellation job handling and a reproducible standalone bundler.
 
-All toggles start off. Solara compatibility and visual/in-game behavior have
-**not** been verified in a running Roblox client. Movement changes may be
+All toggles start off. The user confirmed the UI loads, but the v0.3.1 coin
+probe **failed**. Current farming/collection compatibility remains unverified. Movement changes may be
 overridden by the game. Idle input and clipboard operations are optional and
 report failure when rejected by the executor.
 
@@ -56,10 +75,11 @@ The file to execute is **[`dist/PetSimAutomation.lua`](dist/PetSimAutomation.lua
 
 1. Enter the Classic Event, equip pets and stand beside loaded coins.
 2. Open the file, copy its complete contents into Solara and execute.
-3. Wait for **Protocol probe passed**. If unavailable, use **Status → Copy diagnostics**.
-4. In Farm, start with Nearest priority and enable Auto farm. Enable collection
+3. The UI starts idle. Farm → **Run compatibility check** is a manual native-interface test, not a farming command. If it returns no values, stop retrying that route; use **Status → Copy diagnostics**.
+4. Only after a successful probe, continue with the experimental controls.
+5. In Farm, start with Nearest priority and enable Auto farm. Enable collection
    separately if desired. Right Control hides/shows the panel.
-5. Use Stop All or Unload to stop requests and restore local movement/lighting.
+6. Use Stop All or Unload to stop requests and restore local movement/lighting.
 
 Use the complete standalone file from `dist/`; the source modules do not need
 to be downloaded separately.
@@ -71,7 +91,9 @@ To help identify the event, open **Status → Copy diagnostics**. If clipboard
 support is unavailable, the report is printed to the console. The report includes
 object/module names and the compatibility error. It does not inspect inventory
 contents or credentials. Send a failing report to diagnose the current adapter.
-Use **Reconnect game adapter** after moving into the event to refresh discovery.
+If a previous probe started repeating network warnings, rejoin a fresh client
+before testing again. Unloading the UI does not own or stop game-module threads.
+Do not keep probing a route that reports no values.
 
 ## Build and check
 
@@ -110,6 +132,12 @@ Studio place cannot validate the Classic Event's internals or Solara support.
 - `src/client/Jobs.luau`: cancellation and timeout handling.
 - `src/client/Config.luau`: defaults.
 - `scripts/build.py`: deterministic executor bundle.
-- `tests/`: bundler, targeting and job-lifecycle checks.
+- `tests/`: bundler, adapter, actual-runtime/UI boundary, targeting and job-lifecycle checks.
 
 Research and compatibility evidence: [`docs/research.md`](docs/research.md).
+
+ECC test-first evidence: [`docs/releases/0.4.0/ecc-tdd.md`](docs/releases/0.4.0/ecc-tdd.md).
+
+To copy the retained client console without touching game modules, execute
+[`dist/CopyClientConsole.lua`](dist/CopyClientConsole.lua). It copies locally;
+Roblox may already have expired older log entries.

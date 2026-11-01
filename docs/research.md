@@ -4,23 +4,25 @@ Research performed during this task on 2026-11-01. The requested target is the
 Halloween **Classic Event within PS99**, according to the user's clarification.
 The user's in-event client-log screenshot records **place `85920622393590`**
 and **universe `3317771874`**. These are client-observed IDs, not an independently
-verified official event announcement. The official update name, mechanics and
-network interfaces remain unconfirmed. Older standalone PSX APIs are not used
+verified official event announcement. The official Update99/100 pages were subsequently checked and confirm the
+PSX Classic/Halloween target. Its current scripting interfaces remain unverified. Older standalone PSX APIs are not used
 as evidence for this event.
 
-## Official sources still blocked
+## Official event sources now verified
 
-- BIG Games: https://www.biggames.io/
-- PS99 listing: https://www.roblox.com/games/8737899170/Pet-Simulator-99
+After the environment network update, official pages returned HTTP200:
 
-Both requests failed at the environment's HTTPS proxy with `403 Forbidden`
-before their contents could be read. That Roblox URL identifies the known PS99
-listing, not a verified Classic Event destination. Required domains were added
-to the environment draft; draft saving does not activate network changes.
-The reported event destination is
-https://www.roblox.com/games/85920622393590/ (URL derived from the observed ID;
-its page contents have not been read). A current module diagnostic is still
-needed from inside that place.
+- [Update99, PSX Classic!, October24,2026](https://www.biggames.io/post/pet-simulator-99-update-99)
+  confirms the real PSX event inside PS99, its portal, Spawn/Fantasy progression
+  and classic rewards. This matches the user's target description.
+- [Update100, Halloween Games!, October31,2026](https://www.biggames.io/post/pet-simulator-99-update-100)
+  documents the Halloween content and the PSX Classic Halloween update.
+- Main PS99 listing: https://www.roblox.com/games/8737899170/Pet-Simulator-99
+- User-observed event destination: https://www.roblox.com/games/85920622393590/
+
+The earlier CONNECT403 failures were real at the time. Public rscripts/BIG Games
+requests now succeed after the network revision. YouTube requests still returned
+HTTP403, so no video was watched or transcript verified.
 
 ## Public examples
 
@@ -85,6 +87,58 @@ show only response count/types, plus exported API names/arities; successful
 scalar payload contents are not dumped. A new live run is required to diagnose
 the actual event response rather than assuming the screenshot's cause.
 
+## Confirmed zero-value response and supplied console log
+
+The later v0.3.1 screenshot reports `returns=0; types=none`: the call returns no
+values. This rules out a hidden second tuple value as the cause of that run.
+The first uploaded client log contains 4095 lines and 512 repeated warnings:
+`Debug|Network|Invoke 'getgenv' [Get Stats]`, with Network._check and Save.FetchPlayer
+in the stack. There are no Get Coins response/export diagnostic lines in that
+retained console history. The full private log is not committed.
+
+The second log has 4096 lines, 511 Get Stats warnings and one direct Get Coins
+warning: callerScript:err: Client.Network:306 assertion failed, through _check
+at line 375. That directly establishes a caller-script validation failure for
+Get Coins. It does not prove that another network provider would work. No guard is disabled and an empty reply is never
+turned into a fabricated coin snapshot. Version 0.4 removes automatic probing
+at startup and retains an explicitly requested manual check.
+
+## Requested feature references and access limits
+
+The user identified https://rscripts.net/game/pet-simulator-x and asked for video
+references covering map-wide farming, hatching from anywhere, auto-gold and
+auto-rainbow. The rscripts index now loads. Its advertised feature lists were inspected;
+YouTube still returned403, and no video content was watched. The following
+readable/public references were checked without executing third-party loaders:
+
+The readable Cypaex reference does not demonstrate those unrestricted features:
+its farming filters by CoinGrabDistance and unlocked area (lines948/976), and its
+Buy Egg call is preceded by unlock/world checks and travel within30studs of the
+egg (lines1167–1206). Public gold/rainbow and auto-hatch candidates inspected were
+obfuscated. No current conversion or remote-hatching contract was verified.
+A normal-input macro can operate only the visible client and cannot provide
+remote map-wide behavior. That alternative was paused rather than presented as
+feature-equivalent.
+
+## Additional public source findings
+
+- [Daycare & Auto-Farm,2026-04-09](https://rscripts.net/script/pet-simulator-x-or-daycare-and-auto-farm-rJcJ)
+  advertises farming/hatching and Gold/Rainbow menus. Its code is a key-based
+  external loader; that listing is not proof of current Classic Event support.
+- [OP Script,2023-02-25](https://rscripts.net/script/pet-simulator-x-op-script-3450)
+  advertises conversion features but links an obfuscated Galaxy loader.
+- [Hylician pinned source,2023-07-10](https://github.com/Hylician/Pet-Simulator-X/blob/de93a64312ff41a05b0c69b1afe04099f8ab356b/source)
+  documents Buy Egg and machine requests with same-species pet UID arrays.
+  Its networking is modified using private upvalues; it is not a native-compatible
+  fix for the current caller assertion. No license is declared; no implementation
+  was copied.
+- [Gavin pinned archive,2022-07-04](https://github.com/gavinnn101/RobloxExploitScripts/blob/1a9e0192e14851c032b58c3c6460d80313a5f500/PetSimulatorXArchive/PetSimX.lua)
+  directly consumes Get Coins as a dictionary and uses historical lowercase
+  machine-command names. No current-event compatibility or license is established.
+- [A current-looking PS99 source,2026-10-28](https://github.com/DarkSwarm123/Pet-Simulator/blob/521b606cbf19b47c1933e82eb0af0a91539e129c/Pet%20Simulator%2099.lua)
+  explicitly excludes event place 85920622393590. Its PS99 interfaces are not
+  Classic Event evidence.
+
 ## Solara compatibility evidence
 
 There is no authoritative, current Solara capability matrix in the sources
@@ -109,11 +163,12 @@ compilation and mocked-boundary checks do not establish Solara support.
 
 ## Remaining evidence
 
-To implement current event farming:
-
-1. Read the official event announcement once network access is active.
-2. Run version 0.3 in the event beside loaded coins and record the probe result.
-3. If the probe passes, test one farm cycle and confirm actual game-side pet
-   assignment/coin damage; test collection by observing game-side rewards.
-4. Verify disappearing targets, respawn, cancellation, repeated execution and
-   unload in the actual client. Mocked tests cannot establish those live outcomes.
+1. Review a readable current-event implementation or supported native interface.
+   The supplied index and official event posts have now been reviewed; available
+   public sources do not verify a working current Classic Event backend.
+2. Compare a candidate interface against the observed caller-script rejection.
+   A legacy feature list or menu screenshot cannot establish current support.
+3. Establish a working, non-empty current interface before enabling farming,
+   hatching or conversions. Current reported native probe acceptance is FAILED.
+4. Verify actual game-side actions, rewards, cancellation, respawn and cleanup
+   in the client. Local fixture tests establish only local code guarantees.

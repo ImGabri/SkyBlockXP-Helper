@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.3.1",
+    Version = "0.4.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -151,6 +151,28 @@ function Interface.mount(spec)
         MaxSize = Vector2.new(520, 620),
         MinSize = Vector2.new(280, 280),
     }, panel)
+
+    local function clampPanel(position)
+        if destroyed then return end
+        local viewport = gui.AbsoluteSize
+        if viewport.X <= 0 or viewport.Y <= 0 then return end
+        local halfWidth = math.min(panel.AbsoluteSize.X, viewport.X) / 2
+        local halfHeight = math.min(panel.AbsoluteSize.Y, viewport.Y) / 2
+        position = position or panel.Position
+        local x = position.X.Scale * viewport.X + position.X.Offset
+        local y = position.Y.Scale * viewport.Y + position.Y.Offset
+        panel.Position = UDim2.fromOffset(
+            math.clamp(x, halfWidth, math.max(halfWidth, viewport.X - halfWidth)),
+            math.clamp(y, halfHeight, math.max(halfHeight, viewport.Y - halfHeight))
+        )
+    end
+    connect(gui:GetPropertyChangedSignal("AbsoluteSize"), function()
+        dragInput = nil
+        local viewport = gui.AbsoluteSize
+        sizeConstraint.MinSize = Vector2.new(math.min(280, viewport.X), math.min(if collapsed then 48 else 280, viewport.Y))
+        clampPanel()
+    end)
+    connect(panel:GetPropertyChangedSignal("AbsoluteSize"), function() clampPanel() end)
 
     local header = make("Frame", {
         Name = "Header",
@@ -475,7 +497,7 @@ function Interface.mount(spec)
     input("Farm", "Target name contains", "NameFilter")
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
-    actionButton("Farm", "Reconnect game adapter", "Reconnect")
+    actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     toggle("Misc", "Custom movement", "MovementEnabled")
@@ -519,6 +541,7 @@ function Interface.mount(spec)
         sizeConstraint.MaxSize = if collapsed then Vector2.new(520, 48) else Vector2.new(520, 620)
         sizeConstraint.MinSize = if collapsed then Vector2.new(280, 48) else Vector2.new(280, 280)
         collapseButton.Text = if collapsed then "+" else "-"
+        clampPanel()
     end)
     connect(unloadButton.Activated, function()
         action("Unload")
@@ -544,14 +567,9 @@ function Interface.mount(spec)
         if isMouse or inputObject == dragInput then
             local delta = inputObject.Position - dragStart
             local parentSize = gui.AbsoluteSize
-            local halfWidth = panel.AbsoluteSize.X / 2
-            local halfHeight = panel.AbsoluteSize.Y / 2
             local x = panelStart.X.Scale * parentSize.X + panelStart.X.Offset + delta.X
             local y = panelStart.Y.Scale * parentSize.Y + panelStart.Y.Offset + delta.Y
-            -- Keep a reachable header and prevent losing the panel off-screen.
-            x = math.clamp(x, halfWidth, math.max(halfWidth, parentSize.X - halfWidth))
-            y = math.clamp(y, halfHeight, math.max(halfHeight, parentSize.Y - halfHeight))
-            panel.Position = UDim2.fromOffset(x, y)
+            clampPanel(UDim2.fromOffset(x, y))
         end
     end)
     connect(UserInputService.InputEnded, function(inputObject)
@@ -587,6 +605,7 @@ function Interface.mount(spec)
     end
 
     refresh()
+    clampPanel()
     return handle
 end
 
@@ -611,14 +630,24 @@ function Jobs:busy(name)
     return self.slots[name] ~= nil
 end
 
+function Jobs:blocked(name)
+    local slot = self.slots[name]
+    return slot ~= nil and slot.cancelled == true
+end
+
 function Jobs:start(name, timeout, work, complete)
     if self.slots[name] then return false end
-    local slot = { started = self.driver.clock(), timeout = timeout, complete = complete }
+    local slot = { started = self.driver.clock(), timeout = timeout, complete = complete, cancelled = false }
     self.slots[name] = slot
     slot.thread = self.driver.spawn(function()
-        local outcome = table.pack(pcall(work))
+        local function active()
+            return self.slots[name] == slot and not slot.cancelled
+        end
+        if not active() then return end
+        local outcome = table.pack(pcall(work, active))
         if self.slots[name] ~= slot then return end
         self.slots[name] = nil
+        if slot.cancelled then return end
         complete(table.unpack(outcome, 1, outcome.n))
     end)
     return true
@@ -627,8 +656,13 @@ end
 function Jobs:cancel(name)
     local slot = self.slots[name]
     if not slot then return end
-    self.slots[name] = nil
-    if slot.thread then pcall(self.driver.cancel, slot.thread) end
+    slot.cancelled = true
+    -- Failed native cancellation cannot make an in-flight request disappear.
+    -- Keep its slot reserved, and let the cooperative token block further calls.
+    if slot.thread then
+        local ok = pcall(self.driver.cancel, slot.thread)
+        if ok and self.slots[name] == slot then self.slots[name] = nil end
+    end
 end
 
 function Jobs:cancelAll()
@@ -641,12 +675,16 @@ function Jobs:tick()
     local expired = {}
     local now = self.driver.clock()
     for name, slot in pairs(self.slots) do
-        if now - slot.started >= slot.timeout then table.insert(expired, name) end
+        if not slot.cancelled and now - slot.started >= slot.timeout then
+            table.insert(expired, { name = name, slot = slot })
+        end
     end
-    for _, name in ipairs(expired) do
-        local slot = self.slots[name]
-        self:cancel(name)
-        slot.complete(false, "Request timed out; no overlapping retry was started.")
+    for _, entry in ipairs(expired) do
+        local name, slot = entry.name, entry.slot
+        if self.slots[name] == slot and not slot.cancelled then
+            self:cancel(name)
+            slot.complete(false, "Request timed out. No overlapping retry is allowed while that worker is still running.")
+        end
     end
 end
 
@@ -795,16 +833,23 @@ function PetSim99:_call(method, command, ...)
     return table.unpack(result, 1, result.n)
 end
 
-function PetSim99:_readSnapshot(probe)
+function PetSim99:_readSnapshot(probe, active)
     local generation = self._generation
+    local function current()
+        return generation == self._generation and not self._destroyed and (not active or active())
+    end
+    if not current() then error("Coin read canceled before networking.", 0) end
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
-    local records = returned[1]
+    local records = if returned.n == 1 then returned[1] else nil
     -- Status+payload responses must pass the same concrete coin validation.
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
         records = returned[2]
     end
-    if generation ~= self._generation or self._destroyed then error("Coin read canceled by reconnect or unload.", 0) end
+    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     local root = self:_root()
+    if returned.n == 0 then
+        error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
+    end
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
             .. "); expected a coin dictionary or true plus a coin dictionary. A nil/empty reply does not establish compatibility.", 0)
@@ -850,8 +895,9 @@ function PetSim99:_readSnapshot(probe)
     if probe and #candidates == 0 then
         error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin BasePart. Stand near event coins and reconnect.", 0)
     end
+    if not current() then error("Pet read canceled before module access.", 0) end
     local ok, equipped = pcall(self._petCmds.GetEquipped)
-    if generation ~= self._generation or self._destroyed then error("Pet read canceled by reconnect or unload.", 0) end
+    if not current() then error("Pet read canceled by timeout, reconnect or unload.", 0) end
     if not ok then error("PetCmds.GetEquipped failed: " .. tostring(equipped), 0) end
     if type(equipped) ~= "table" then error("PetCmds.GetEquipped returned an unsupported value; expected pet records.", 0) end
     local pets, seen = {}, {}
@@ -869,9 +915,13 @@ function PetSim99:_readSnapshot(probe)
     return { Candidates = candidates, Pets = pets, HealthKnown = #candidates > 0 and allHealthKnown }
 end
 
-function PetSim99:Connect()
+function PetSim99:Connect(active)
+    if active and not active() then return self end
     self._generation += 1
     local generation = self._generation
+    local function current()
+        return generation == self._generation and not self._destroyed and (not active or active())
+    end
     self._destroyed, self._connected = false, false
     self.Supported = supportedNone()
     self._network, self._petCmds, self._world, self._coins, self._things = nil, nil, nil, nil, nil
@@ -910,8 +960,9 @@ function PetSim99:Connect()
             networkPath = "Library.Network"
         end
         local network = requireModule(networkModule, networkPath)
+        if not current() then return end
         local petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds")
-        if generation ~= self._generation or self._destroyed then return end
+        if not current() then return end
         self._network, self._petCmds = network, petCmds
         self._networkExports = exportSummary(network)
         self._petExports = exportSummary(petCmds)
@@ -929,11 +980,11 @@ function PetSim99:Connect()
         local worldModule = client:FindFirstChild("WorldCmds")
         if worldModule and worldModule:IsA("ModuleScript") then
             local loaded, value = pcall(require, worldModule)
-            if generation ~= self._generation or self._destroyed then return end
+            if not current() then return end
             if loaded and type(value) == "table" and type(value.HasArea) == "function" then self._world = value end
         end
-        local snapshot = self:_readSnapshot(true)
-        if generation ~= self._generation or self._destroyed then return end
+        local snapshot = self:_readSnapshot(true, active)
+        if not current() then return end
         self._connected = true
         self.Supported.AutoFarm, self.Supported.WalkToTarget = true, true
         local orbs = things:FindFirstChild("Orbs")
@@ -943,17 +994,19 @@ function PetSim99:Connect()
         self.Reason = string.format("Experimental legacy protocol probe passed (%d loaded coins, %d equipped pets); Classic Event farming still unverified in game.",
             #snapshot.Candidates, #snapshot.Pets)
     end)
-    if generation ~= self._generation or self._destroyed then return self end
+    if not current() then return self end
     if not ok then self:_block(tostring(message)) end
     self:_report()
     return self
 end
 
-function PetSim99:Snapshot()
+function PetSim99:Snapshot(active)
     if not self._connected or self._destroyed then error(self.Reason, 0) end
     local generation = self._generation
-    local ok, result = pcall(self._readSnapshot, self, false)
-    if generation ~= self._generation or self._destroyed then error("Snapshot canceled by reconnect or unload.", 0) end
+    local ok, result = pcall(self._readSnapshot, self, false, active)
+    if generation ~= self._generation or self._destroyed or (active and not active()) then
+        error("Snapshot canceled by timeout, reconnect or unload.", 0)
+    end
     if not ok then self:_fail(tostring(result)) end
     return result
 end
@@ -988,7 +1041,7 @@ function PetSim99:Assign(target, pets, active)
         end
     end)
     self:_report()
-    if not ok and generation == self._generation and not self._destroyed then self:_fail(tostring(message)) end
+    if not ok and current() then self:_fail(tostring(message)) end
     return count
 end
 
@@ -1047,7 +1100,7 @@ function PetSim99:Collect(kind, radius, active)
         end
     end)
     self:_report()
-    if not ok and generation == self._generation and not self._destroyed then self:_fail(tostring(message)) end
+    if not ok and current() then self:_fail(tostring(message)) end
     return count
 end
 
@@ -1174,7 +1227,7 @@ function Runtime.new(player, parent)
         Player = player, Alive = true, Connections = {}, Jobs = Jobs.new(),
         Options = table.clone(Config.Options), Adapter = PetSim99.new(),
         Ready = false, Failures = {}, NextAt = {},
-        State = { Status = "Inspecting game...", Target = "None", EquippedPets = 0,
+        State = { Status = "Idle — run the compatibility check manually", Target = "None", EquippedPets = 0,
             Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "" },
     }, Runtime)
     self.Ui = Interface.mount({
@@ -1215,11 +1268,13 @@ function Runtime.new(player, parent)
             self:Publish()
         end
     end))
-    self:Reconnect()
+    self:Publish()
     self.Pulse = task.spawn(function()
         while self.Alive do
-            self.Jobs:tick()
-            local ok, message = pcall(function() self:Step() end)
+            local ok, message = pcall(function()
+                self.Jobs:tick()
+                self:Step()
+            end)
             if not ok then
                 self:StopAll()
                 self.State.LastError = "Scheduler stopped: " .. tostring(message)
@@ -1286,9 +1341,9 @@ function Runtime:Step()
     end
     if self.Options.AutoFarm and not self.Jobs:busy("AutoFarm") and now >= (self.NextAt.AutoFarm or 0) then
         self.NextAt.AutoFarm = now + self.Options.FarmInterval
-        self.Jobs:start("AutoFarm", Config.FarmTimeout, function()
-            local snapshot = self.Adapter:Snapshot()
-            if self.Player.Character ~= character or not character.Parent or not root.Parent or humanoid.Health <= 0 then
+        self.Jobs:start("AutoFarm", Config.FarmTimeout, function(activeJob)
+            local snapshot = self.Adapter:Snapshot(activeJob)
+            if not activeJob() or self.Player.Character ~= character or not character.Parent or not root.Parent or humanoid.Health <= 0 then
                 return { Status = "Waiting for the current character..." }
             end
             if self.Options.FarmMode ~= "Nearest" and not snapshot.HealthKnown then
@@ -1320,7 +1375,7 @@ function Runtime:Step()
                 return { Status = "Recent farm requests; watching target.", Target = title }
             end
             local count = self.Adapter:Assign(target, snapshot.Pets, function()
-                return self.Alive and self.Options.AutoFarm and self.Player.Character == character
+                return activeJob() and self.Alive and self.Options.AutoFarm and self.Player.Character == character
                     and character.Parent ~= nil and root.Parent ~= nil and humanoid.Parent ~= nil and humanoid.Health > 0
             end)
             if count > 0 then
@@ -1335,9 +1390,9 @@ function Runtime:Step()
         local key, kind, field = pair[1], pair[2], pair[3]
         if self.Options[key] and not self.Jobs:busy(key) and now >= (self.NextAt[key] or 0) then
             self.NextAt[key] = now + 1
-            self.Jobs:start(key, Config.RequestTimeout, function()
+            self.Jobs:start(key, Config.RequestTimeout, function(activeJob)
                 local count = self.Adapter:Collect(kind, self.Options.Radius, function()
-                    return self.Alive and self.Options[key] and self.Player.Character == character
+                    return activeJob() and self.Alive and self.Options[key] and self.Player.Character == character
                         and character.Parent ~= nil and root.Parent ~= nil and humanoid.Parent ~= nil and humanoid.Health > 0
                 end)
                 return { [field] = self.State[field] + count }
@@ -1345,6 +1400,12 @@ function Runtime:Step()
         end
     end
     if now >= (self.NextPublish or 0) then
+        for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do
+            if self.Options[key] and self.Jobs:blocked(key) then
+                self.State.Status = "Waiting for a canceled request to finish; no retry sent."
+                break
+            end
+        end
         self.NextPublish = now + 1
         self:Publish()
     end
@@ -1483,20 +1544,26 @@ function Runtime:Reconnect()
     self.Adapter.Supported = { AutoFarm = false, AutoCollectOrbs = false, AutoCollectLootbags = false, WalkToTarget = false }
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
-    self.Jobs:start("connect", Config.RequestTimeout, function()
-        return self.Adapter:Connect()
+    local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
+        return self.Adapter:Connect(activeJob)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
         self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) else self.Adapter.Reason
         self:Publish()
     end)
+    if not started then
+        self.State.Status = "Previous compatibility check is still returning; no new check sent."
+        self:Publish()
+        return false, self.State.Status
+    end
+    return true
 end
 
 function Runtime:Diagnostics()
     return table.concat({
         Config.Name .. " v" .. Config.Version,
-        "All automation starts disabled. Connect probes the legacy Get Coins interface.",
+        "Startup makes no game-module or network probe. The compatibility check is manual.",
         self.Adapter.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
         "Last error: " .. tostring(self.State.LastError),
@@ -1506,7 +1573,7 @@ end
 
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
-    elseif action == "Reconnect" then self:Reconnect()
+    elseif action == "Reconnect" then return self:Reconnect()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)
     elseif action == "Unload" then self:Destroy()
     elseif action == "Rejoin" then

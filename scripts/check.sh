@@ -9,7 +9,7 @@ python3 - <<'PY'
 from pathlib import Path
 import subprocess
 sources = [str(p) for p in sorted(Path('src').rglob('*.luau'))]
-sources.append('dist/PetSimAutomation.lua')
+sources.extend(str(p) for p in sorted(Path('dist').glob('*.lua')))
 subprocess.run(['.tools/bin/luau-compile', *sources], check=True, stdout=subprocess.DEVNULL)
 print(f'Compiled {len(sources)} source/bundle files.')
 PY
