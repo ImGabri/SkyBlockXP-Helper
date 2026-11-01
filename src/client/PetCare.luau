@@ -91,7 +91,7 @@ function PetCare:Connect(active)
         self._phase = "Pet API exports validated"
         self:_report()
         self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
-            eggs = eggDirectory, pets = petDirectory }
+            eggs = eggDirectory, pets = petDirectory, facade = facade }
         self._loader = loaderName
         self.Supported.AutoHatch = type(eggDirectory) == "table"
         local conversion = type(petDirectory) == "table" and type(getEquipped) == "function"
@@ -150,22 +150,75 @@ function PetCare:_request(key, command, counter, current, ...)
     return 1
 end
 
+function PetCare:_hatchPlan(eggName, mode, current)
+    if not text(eggName) then error("Enter an exact egg directory name first.", 0) end
+    local count = if mode == "Single" then 1 elseif mode == "Triple" then 3 elseif mode == "Octuple" then 8 else nil
+    if not count then error("Choose Single, Triple or Octuple hatch mode.", 0) end
+    local egg = self._api.eggs[eggName]
+    if not current() then return nil end
+    if type(egg) ~= "table" or egg.hatchable ~= true or egg.disabled or egg.isPremium
+        or not text(egg.currency) or egg.currency:lower() == "robux" or not number(egg.cost) or egg.cost <= 0 then
+        error("Unknown, unavailable or premium egg. Select a hatchable in-game currency egg.", 0)
+    end
+    self._phase = "Reading hatch balance via Save.Get"
+    self:_report()
+    local save = self._api.getSave()
+    if not current() then return nil end
+    if type(save) ~= "table" or not number(save[egg.currency]) then
+        error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
+    end
+    if save[egg.currency] < egg.cost * count then
+        self._phase = "Waiting for hatch currency"
+        self.Reason = "Waiting for " .. tostring(egg.cost * count) .. " " .. egg.currency .. " at the egg directory price."
+        self:_report()
+        return nil
+    end
+    return { Count = count }
+end
+
+function PetCare:CanHatch(eggName, mode, active)
+    local ready = self:_run("AutoHatch", active, function(current)
+        return self:_hatchPlan(eggName, mode, current) ~= nil and current()
+    end)
+    return ready == true
+end
+
+function PetCare:GetEggTarget(eggName, active)
+    local result = self:_run("AutoHatch", active, function(current)
+        if not text(eggName) or type(self._api.eggs[eggName]) ~= "table" then error("Select an exact egg directory name first.", 0) end
+        if not current() then return nil end
+        self._phase = "Reading public Library.WorldCmds for loaded eggs"
+        self:_report()
+        local available, world = pcall(function() return self._api.facade.WorldCmds end)
+        if not current() then return nil end
+        local getEggs = available and type(world) == "table" and world.GetAllEggs
+        if not current() then return nil end
+        if type(getEggs) ~= "function" then
+            error("Public WorldCmds.GetAllEggs is unavailable. Use Egg travel Off and approach the egg manually.", 0)
+        end
+        self._phase = "Reading loaded eggs via WorldCmds.GetAllEggs"
+        self:_report()
+        local eggs = getEggs()
+        if not current() then return nil end
+        if type(eggs) ~= "table" then error("GetAllEggs returned an unsupported list.", 0) end
+        local selected
+        for _, model in pairs(eggs) do
+            if typeof(model) ~= "Instance" or not model:IsA("Model") then error("GetAllEggs contains an unknown entry.", 0) end
+            if model:GetAttribute("ID") == eggName and model:IsDescendantOf(workspace) then
+                if selected then error("Multiple loaded egg models share this ID; approach the exact egg manually with Egg travel Off.", 0) end
+                selected = model
+            end
+        end
+        if not current() then return nil end
+        if not selected then error("Selected egg is not loaded in this world. Enter its unlocked area normally, then retry.", 0) end
+        return selected
+    end)
+    return if result == 0 then nil else result
+end
+
 function PetCare:Hatch(eggName, mode, active)
     return self:_run("AutoHatch", active, function(current)
-        if not text(eggName) then error("Enter an exact egg directory name first.", 0) end
-        local count = if mode == "Single" then 1 elseif mode == "Triple" then 3 elseif mode == "Octuple" then 8 else nil
-        if not count then error("Choose Single, Triple or Octuple hatch mode.", 0) end
-        local egg = self._api.eggs[eggName]
-        if not current() then return 0 end
-        if type(egg) ~= "table" or egg.hatchable ~= true or egg.disabled or egg.isPremium
-            or not text(egg.currency) or egg.currency:lower() == "robux" or not number(egg.cost) or egg.cost <= 0 then
-            error("Unknown, unavailable or premium egg. Select a hatchable in-game currency egg.", 0)
-        end
-        local save = self._api.getSave()
-        if not current() then return 0 end
-        if type(save) ~= "table" or not number(save[egg.currency]) or save[egg.currency] < egg.cost * count then
-            error("Insufficient or unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
-        end
+        if not self:_hatchPlan(eggName, mode, current) or not current() then return 0 end
         return self:_request("AutoHatch", "Buy Egg", "HatchRequests", current, eggName, mode == "Triple", mode == "Octuple")
     end)
 end
@@ -230,9 +283,13 @@ function PetCare:_conversionBatch(variant, selected, current)
     if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
     local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
         or definition.rarity == "Exclusive" or definition.rarity == "Event"
+    self._phase = "Reading conversion inventory via Save.Get"
+    self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
     if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    self._phase = "Reading equipped pets via PetCmds.GetEquipped"
+    self:_report()
     local equipped = self._api.getEquipped()
     if not current() then return nil end
     if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
