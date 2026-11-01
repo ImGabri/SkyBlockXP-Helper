@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.1**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.1. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -33,11 +33,17 @@ local movement, lighting and menu states owned by the suite.
    are excluded; the visible currency balance must cover the selected hatch count.
 3. Click **Open inventory** and let its pet slots load. Use **Next conversion
    species** or enter one exact species name/ID. An empty selection never converts.
-4. **Convert6 to gold** uses six Normal pets; **Convert6 gold to rainbow** uses
+4. Leave **Machine travel → Walk** enabled. The suite checks for an eligible batch,
+   walks to the loaded machine Pad, verifies proximity and re-reads inventory before
+   submitting. **Go to gold/rainbow machine** walks without spending pets. If the
+   machine is in another unloaded world or no path exists, enter its unlocked area
+   normally and retry. **Off** leaves travel to you.
+5. **Convert6 to gold** uses six Normal pets; **Convert6 gold to rainbow** uses
    six Gold pets. Auto gold / Auto rainbow use the same fixed six-pet rule. Both
    stages can run with Auto hatch; inventory updates determine when another batch
    becomes available. Species and variants are never mixed.
-5. Open egg/gold/rainbow/inventory buttons enable existing native ScreenGuis if
+6. Gold/rainbow menu buttons approach their machine first in Walk mode, then
+   enable its existing ScreenGui. Egg/inventory buttons enable existing menus if
    present. A missing menu is reported; no menu, machine access or server permission
    is fabricated. The Egg menu name remains a runtime candidate.
 
@@ -48,6 +54,9 @@ nicknamed pets and pets with nonempty enchantments are excluded. Some raw option
 protection flags are defensive legacy checks; the current live inventory schema
 is not verified. No pets are unlocked. The suite retains submitted UIDs while
 inventory replication lags, including uncertain replies, to prevent replay.
+An explicit false reply saying "too far" preserves the server message, stops the
+operation and releases only that unconsumed batch for manual retry after moving.
+Unknown replies retain their reservations; no automatic retry is sent.
 
 Historical PSX examples label six pets as100%. This build enforces exactly six;
 **the current server controls the actual chance, costs, access and range**. It
@@ -71,10 +80,19 @@ and pickup controls. Start with Nearest priority. Empty/rejected replies stay
 blocked; do not repeatedly probe a rejected route. Rejoin if a previous script
 started repeating game-module warnings.
 
+Farming accepts guarded legacy/current coin shapes (`health`/`h`, loaded
+`Coin`/`POS` markers); invalid or conflicting health is rejected. Per-pet Join Coin
+results must explicitly accept a UID before Farm Coin is sent.
 Farming supports equipped-pet dispatch, radius/area/name filters, target priorities,
 optional walking and nearby orb/lootbag requests. It does not establish map-wide
 server access. Misc offers movement settings, Fullbright, optional idle input and
 rejoin. Status shows diagnostics, separate pet/farm counters and Clear status error.
+
+Machine walking uses ordinary Roblox pathfinding, with cancellation, jump
+waypoints and a60-second travel deadline. Eight studs is a conservative local
+arrival target, not an authoritative server-range guarantee. Missing/moved pads,
+blocked paths and character replacement stop the trip before a conversion.
+Farm movement pauses during a machine journey.
 
 All pet mutations share one job slot; a pending uncancellable request cannot
 be overlapped. Slow conversions cannot starve hatch/gold/rainbow stages. Disable,
@@ -115,12 +133,13 @@ rename returned403 because the integration lacks administration access.
 
 - `src/client/PetCare.luau`: public-library egg/machine commands and native menus.
 - `src/client/ConversionPolicy.luau`: pure deterministic six-pet selection.
+- `src/client/MachineNavigation.luau`: walking to loaded machine pads.
 - `src/client/PetSim99.luau`: experimental coin adapter and diagnostics.
 - `src/client/Runtime.luau`, `Jobs.luau`: scheduler, utilities, cancellation.
 - `src/client/Interface.luau`, `Config.luau`, `Policy.luau`: UI and settings.
 - `scripts/build.py`: standalone bundler; `tests/`: executable local fixtures.
 - [`docs/research.md`](docs/research.md): pinned public references and limitations.
-- [`v0.6 evidence`](docs/releases/0.6.0/ecc-tdd.md): actual RED/GREEN checkpoints.
+- [`v0.7.1 evidence`](docs/releases/0.7.1/ecc-tdd.md): actual RED/GREEN checkpoints.
 
 [`dist/CopyClientConsole.lua`](dist/CopyClientConsole.lua) copies retained client
 logs locally without loading game modules. Roblox may have expired older entries.

@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.0",
+    Version = "0.7.1",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -32,6 +32,7 @@ return table.freeze({
         HatchInterval = 3,
         ConversionSpecies = "",
         ConversionInterval = 3,
+        MachineTravelMode = "Walk",
         MovementEnabled = false,
         WalkSpeed = 24,
         JumpPower = 50,
@@ -39,6 +40,7 @@ return table.freeze({
         AntiIdle = false,
     }),
     RequestTimeout = 30,
+    TravelTimeout = 60,
     FarmTimeout = 60,
     RetryLimit = 3,
     ReassignSeconds = 10,
@@ -152,6 +154,7 @@ local defaults = {
     AutoHatch = false,
     ConversionSpecies = "",
     ConversionInterval = 3,
+    MachineTravelMode = "Walk",
     AutoGold = false,
     AutoRainbow = false,
     MovementEnabled = false,
@@ -599,7 +602,7 @@ function Interface.mount(spec)
         TextYAlignment = Enum.TextYAlignment.Top,
         TextColor3 = colors.muted,
         LayoutOrder = rowOrder,
-        Text = "Eggs spend in-game currency. Open Inventory first: conversion requires loaded, unlocked inventory slots. Choose an exact species; only 6 matching eligible pets are sent. The server decides conversion chances; current event support needs testing.",
+        Text = "Eggs spend in-game currency. Open Inventory first; only 6 matching, eligible, unlocked pets are used. Walk mode approaches the loaded machine before converting. Off requires you to stand near it yourself. The server decides access and chances.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
     input("Pets", "Egg name", "EggName")
@@ -612,6 +615,9 @@ function Interface.mount(spec)
     input("Pets", "Convert species (exact name / ID)", "ConversionSpecies")
     actionButton("Pets", "Next conversion species", "NextSpecies")
     input("Pets", "Conversion interval (seconds)", "ConversionInterval", 2, 30)
+    cycle("Pets", "Machine travel", "MachineTravelMode", { "Walk", "Off" })
+    actionButton("Pets", "Go to gold machine", "GoGoldMachine")
+    actionButton("Pets", "Go to rainbow machine", "GoRainbowMachine")
     actionButton("Pets", "Convert 6 to gold", "GoldOnce")
     toggle("Pets", "Auto gold (6 normal pets)", "AutoGold")
     actionButton("Pets", "Open gold menu", "OpenGoldMenu")
@@ -840,6 +846,155 @@ end
 end
 
 do
+__factories["MachineNavigation.luau"] = function(__require)
+--!nocheck
+-- Walk to loaded interaction pads; no teleporting, remotes or range spoofing.
+local Config = __require("Config.luau")
+local Navigation = {}
+Navigation.__index = Navigation
+
+local ARRIVAL_DISTANCE = 8
+local WAYPOINT_DISTANCE = 4
+
+local function finite(value)
+    return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+
+local function position(value)
+    return typeof(value) == "Vector3" and finite(value.X) and finite(value.Y) and finite(value.Z)
+end
+
+local function child(parent, name)
+    return parent and parent:FindFirstChild(name)
+end
+
+function Navigation.new(player, onProgress)
+    return setmetatable({ Player = player, OnProgress = onProgress, _generation = 0 }, Navigation)
+end
+
+function Navigation:_progress(message)
+    self.Stage = message
+    if type(self.OnProgress) == "function" then pcall(self.OnProgress, message) end
+end
+
+function Navigation:_halt(state)
+    if not state or not state.moving then return end
+    state.moving = false
+    if state.root.Parent and state.humanoid.Parent and position(state.root.Position) then
+        pcall(function() state.humanoid:MoveTo(state.root.Position) end)
+    end
+end
+
+function Navigation:Stop()
+    self._generation += 1
+    local state = self._state
+    self._state = nil
+    self:_halt(state)
+end
+
+function Navigation:Approach(variant, active)
+    if active and not active() then return false end
+    if self._owner and coroutine.status(self._owner) == "dead" then
+        self:_halt(self._state)
+        self._state, self._owner = nil, nil
+    end
+    if self._owner then error("A previous machine walk is still returning; no overlapping walk started.", 0) end
+    local names = { Gold = "Gold Machine", Rainbow = "Rainbow Machine" }
+    local name = names[variant]
+    if not name then error("Choose Gold or Rainbow machine navigation.", 0) end
+    local map = workspace:FindFirstChild("__MAP")
+    local interactive = child(map, "Interactive")
+    local machine = child(interactive, name)
+    local pad = child(machine, "Pad")
+    if not machine or not machine:IsA("Model") or not pad or not pad:IsA("BasePart") or not position(pad.Position) then
+        error(name .. " has no loaded __MAP.Interactive model with a Pad part. Enter its world and load the machine normally.", 0)
+    end
+    local character = self.Player.Character
+    local root = child(character, "HumanoidRootPart")
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    if not character or not character.Parent or not root or not root:IsA("BasePart") or not position(root.Position)
+        or not humanoid or not finite(humanoid.Health) or humanoid.Health <= 0 then
+        error("A living character with HumanoidRootPart is required to walk to a machine.", 0)
+    end
+    local generation = self._generation
+    local owner = coroutine.running()
+    local state = { character = character, root = root, humanoid = humanoid, moving = false }
+    local target = pad.Position
+    local timeout = if finite(Config.TravelTimeout) and Config.TravelTimeout > 0 then Config.TravelTimeout else 60
+    local deadline = os.clock() + timeout
+    self._state, self._owner = state, owner
+
+    local function current()
+        if self._generation ~= generation or self._state ~= state or self.Player.Character ~= character
+            or not character.Parent or root.Parent ~= character or humanoid.Parent ~= character
+            or not finite(humanoid.Health) or humanoid.Health <= 0 or (active and not active()) then return false end
+        if workspace:FindFirstChild("__MAP") ~= map or not map.Parent or child(map, "Interactive") ~= interactive
+            or interactive.Parent ~= map or child(interactive, name) ~= machine or machine.Parent ~= interactive
+            or child(machine, "Pad") ~= pad or pad.Parent ~= machine or not position(pad.Position)
+            or (pad.Position - target).Magnitude > 0.1 then
+            error(name .. " moved or unloaded while walking; no conversion request should be sent.", 0)
+        end
+        if not position(root.Position) then error("Character position became unreadable while walking.", 0) end
+        if os.clock() >= deadline then error("Walking to " .. name .. " timed out before verified arrival.", 0) end
+        return true
+    end
+
+    local ok, result = pcall(function()
+        if not current() then return false end
+        if (root.Position - target).Magnitude <= ARRIVAL_DISTANCE then return true end
+        self:_progress("Finding a walking path to " .. name .. "...")
+        if not current() then return false end
+        local service = game:GetService("PathfindingService")
+        local path = service:CreatePath({ AgentCanJump = true, WaypointSpacing = 4 })
+        if not current() then return false end
+        path:ComputeAsync(root.Position, target)
+        if not current() then return false end
+        if path.Status ~= Enum.PathStatus.Success then
+            error("No walkable path to " .. name .. ". Move nearer or enter the correct unlocked area, then retry.", 0)
+        end
+        local waypoints = path:GetWaypoints()
+        if not current() then return false end
+        if type(waypoints) ~= "table" or #waypoints == 0 then error("Pathfinding returned no walking waypoints.", 0) end
+        for _, waypoint in ipairs(waypoints) do
+            if not current() then return false end
+            if (root.Position - target).Magnitude <= ARRIVAL_DISTANCE then break end
+            if not position(waypoint.Position) then error("Pathfinding returned an unreadable waypoint.", 0) end
+            -- A nearby jump can still be required to clear the next obstacle.
+            if (root.Position - waypoint.Position).Magnitude <= WAYPOINT_DISTANCE
+                and waypoint.Action ~= Enum.PathWaypointAction.Jump then continue end
+            self:_progress("Walking to " .. name .. " (" .. tostring(math.ceil((root.Position - target).Magnitude)) .. " studs)...")
+            if not current() then return false end
+            if waypoint.Action == Enum.PathWaypointAction.Jump then humanoid.Jump = true end
+            state.moving = true
+            humanoid:MoveTo(waypoint.Position)
+            while true do
+                if not current() then return false end
+                if (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
+                    or (root.Position - waypoint.Position).Magnitude <= WAYPOINT_DISTANCE then break end
+                task.wait(0.1)
+            end
+        end
+        if not current() then return false end
+        if (root.Position - target).Magnitude > ARRIVAL_DISTANCE then
+            error("Walking ended too far from " .. name .. "; no conversion request should be sent.", 0)
+        end
+        self:_progress("Arrived near " .. name .. "; checking conversion eligibility.")
+        if not current() then return false end
+        return (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
+    end)
+    -- Only this state's movement may be halted; a stale walk cannot stop a newer one.
+    self:_halt(state)
+    if self._state == state then self._state = nil end
+    if self._owner == owner then self._owner = nil end
+    if not ok then error(result, 0) end
+    return result
+end
+
+return Navigation
+end
+end
+
+do
 __factories["PetCare.luau"] = function(__require)
 --!nocheck
 -- Native public-library integration. Legacy signatures are not live-event proof.
@@ -896,23 +1051,32 @@ function PetCare:Connect(active)
             end
         end
         if not current() then return end
+        self._loader = loaderName
         self._phase = "Loading pet API facade"
         self:_report()
         local facade = loader(library)
         if not current() then return end
         if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+        self._phase = "Reading public Library.Network"
+        self:_report()
         local network = facade.Network
         if not current() then return end
         local invoke = type(network) == "table" and network.Invoke
         if not current() then return end
+        self._phase = "Reading public Library.Save"
+        self:_report()
         local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
+        self._phase = "Reading public Library.PetCmds"
+        self:_report()
         local pets = facade.PetCmds
         if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
         if not current() then return end
+        self._phase = "Reading public Library.Directory"
+        self:_report()
         local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
@@ -1032,7 +1196,7 @@ function PetCare:NextChoice(kind, previous)
             eligible = definition.hatchable == true and not definition.disabled and not definition.isPremium
                 and text(definition.currency) and definition.currency:lower() ~= "robux" and number(definition.cost) and definition.cost > 0
         else
-            eligible = text(definition.rarity) and not definition.isPremium and not definition.huge and not definition.titanic
+            eligible = text(definition.rarity) and not definition.isPremium and not definition.isGift and not definition.huge and not definition.titanic
                 and definition.rarity ~= "Exclusive" and definition.rarity ~= "Event"
         end
         if eligible and (text(id) or number(id)) then
@@ -1058,55 +1222,71 @@ local function unlockedSlot(playerGui, uid)
     return not favorite or favorite.Visible == false
 end
 
+function PetCare:_conversionBatch(variant, selected, current)
+    local id, definition = speciesId(self._api.pets, selected)
+    if not current() then return nil end
+    if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
+    local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
+        or definition.rarity == "Exclusive" or definition.rarity == "Event"
+    local save = self._api.getSave()
+    if not current() then return nil end
+    if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    local equipped = self._api.getEquipped()
+    if not current() then return nil end
+    if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
+    local worn = {}
+    for _, pet in pairs(equipped) do
+        if type(pet) ~= "table" or not text(pet.uid) then error("Unknown equipped-pet schema.", 0) end
+        worn[pet.uid] = true
+    end
+    local normalized, present = {}, {}
+    local player = game:GetService("Players").LocalPlayer
+    local gui = player and player:FindFirstChild("PlayerGui")
+    for _, pet in pairs(save.Pets) do
+        if type(pet) ~= "table" or not text(pet.uid) or (type(pet.id) ~= "string" and type(pet.id) ~= "number") then
+            error("Unknown inventory pet schema; no conversion sent.", 0)
+        end
+        present[pet.uid] = true
+        local protected = premium or self._reserved[pet.uid] or false
+        for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "l", "lk", "locked", "favorite", "fav" }) do
+            if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
+        end
+        protected = protected or pet.dm or pet.hc or pet.sh or pet.l or pet.lk or pet.locked or pet.favorite or pet.fav
+            or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
+        local unlocked = unlockedSlot(gui, pet.uid)
+        table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),
+            variant = if pet.r then "Rainbow" elseif pet.g then "Gold" else "Normal",
+            protected = protected == true, equipped = worn[pet.uid] == true,
+            eligible = tostring(pet.id) == id and unlocked and not protected })
+    end
+    if not current() then return nil end
+    for uid in pairs(self._reserved) do if not present[uid] then self._reserved[uid] = nil end end
+    local batch, reason = ConversionPolicy.NextBatch(normalized, variant)
+    if not batch then
+        self.Reason = (reason or "No eligible batch.") .. " Open Inventory to load lock indicators; select one species."
+        self:_report()
+        return nil
+    end
+    if not current() then return nil end
+    return batch
+end
+
+function PetCare:CanConvert(variant, selected, active)
+    local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
+    if not key then error("Choose Gold or Rainbow conversion.", 0) end
+    local result = self:_run(key, active, function(current)
+        local batch = self:_conversionBatch(variant, selected, current)
+        return batch ~= nil and current()
+    end)
+    return result == true
+end
+
 function PetCare:Convert(variant, selected, active)
     local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
     if not key then error("Choose Gold or Rainbow conversion.", 0) end
     return self:_run(key, active, function(current)
-        local id, definition = speciesId(self._api.pets, selected)
-        if not current() then return 0 end
-        if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
-        local premium = definition.isPremium or definition.huge or definition.titanic
-            or definition.rarity == "Exclusive" or definition.rarity == "Event"
-        local save = self._api.getSave()
-        if not current() then return 0 end
-        if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
-        local equipped = self._api.getEquipped()
-        if not current() then return 0 end
-        if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
-        local worn = {}
-        for _, pet in pairs(equipped) do
-            if type(pet) ~= "table" or not text(pet.uid) then error("Unknown equipped-pet schema.", 0) end
-            worn[pet.uid] = true
-        end
-        local normalized, present = {}, {}
-        local player = game:GetService("Players").LocalPlayer
-        local gui = player and player:FindFirstChild("PlayerGui")
-        for _, pet in pairs(save.Pets) do
-            if type(pet) ~= "table" or not text(pet.uid) or (type(pet.id) ~= "string" and type(pet.id) ~= "number") then
-                error("Unknown inventory pet schema; no conversion sent.", 0)
-            end
-            present[pet.uid] = true
-            local protected = premium or self._reserved[pet.uid] or false
-            for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "lk", "locked", "favorite", "fav" }) do
-                if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
-            end
-            protected = protected or pet.dm or pet.hc or pet.sh or pet.lk or pet.locked or pet.favorite or pet.fav
-                or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
-            local unlocked = unlockedSlot(gui, pet.uid)
-            table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),
-                variant = if pet.r then "Rainbow" elseif pet.g then "Gold" else "Normal",
-                protected = protected == true, equipped = worn[pet.uid] == true,
-                eligible = tostring(pet.id) == id and unlocked and not protected })
-        end
-        if not current() then return 0 end
-        for uid in pairs(self._reserved) do if not present[uid] then self._reserved[uid] = nil end end
-        local batch, reason = ConversionPolicy.NextBatch(normalized, variant)
-        if not batch then
-            self.Reason = (reason or "No eligible batch.") .. " Open Inventory to load lock indicators; select one species."
-            self:_report()
-            return 0
-        end
-        if not current() then return 0 end
+        local batch = self:_conversionBatch(variant, selected, current)
+        if not batch or not current() then return 0 end
         -- Reserve before the request: an uncertain/late reply must never replay UIDs.
         for _, uid in ipairs(batch) do self._reserved[uid] = true end
         local ok, result = pcall(self._request, self, key,
@@ -1313,6 +1493,7 @@ function PetSim99:_readSnapshot(probe, active)
     self._phase = "Waiting for Network.Invoke(Get Coins) to return"
     self:_report()
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
+    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     self._phase = "Validating Get Coins reply"
     self:_report()
     local records = if returned.n == 1 then returned[1] else nil
@@ -1320,7 +1501,6 @@ function PetSim99:_readSnapshot(probe, active)
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
         records = returned[2]
     end
-    if not current() then error("Coin read canceled by timeout, reconnect or unload.", 0) end
     local root = self:_root()
     if returned.n == 0 then
         error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
@@ -1337,11 +1517,16 @@ function PetSim99:_readSnapshot(probe, active)
     for id, raw in pairs(records) do
         if not identifier(id) or type(raw) ~= "table" or not vector(raw.p)
             or type(raw.a) ~= "string" or type(raw.n) ~= "string"
-            or (raw.health ~= nil and (not finite(raw.health) or raw.health < 0)) then
+            or (raw.health ~= nil and (not finite(raw.health) or raw.health < 0))
+            or (raw.h ~= nil and (not finite(raw.h) or raw.h < 0))
+            or (raw.health ~= nil and raw.h ~= nil and raw.health ~= raw.h) then
             error("Get Coins returned an unknown coin schema. Farming is disabled rather than guessing a wrapper or field mapping.", 0)
         end
         local instance = self._coins:FindFirstChild(tostring(id))
         local coinPart = instance and instance:FindFirstChild("Coin")
+        if not coinPart or not coinPart:IsA("BasePart") then
+            coinPart = instance and instance:FindFirstChild("POS")
+        end
         local areaAllowed = true
         if self._world and type(self._world.HasArea) == "function" then
             local ok, allowed = pcall(self._world.HasArea, raw.a)
@@ -1349,11 +1534,12 @@ function PetSim99:_readSnapshot(probe, active)
             areaAllowed = allowed == true
         end
         if instance and instance:IsA("Model") and coinPart and coinPart:IsA("BasePart") and areaAllowed then
-            local healthKnown = raw.health ~= nil
+            local health = if raw.health ~= nil then raw.health else raw.h
+            local healthKnown = health ~= nil
             allHealthKnown = allHealthKnown and healthKnown
             table.insert(candidates, {
                 id = id, name = raw.n, area = raw.a,
-                health = if healthKnown then raw.health else 1,
+                health = if healthKnown then health else 1,
                 healthKnown = healthKnown,
                 distance = (root.Position - raw.p).Magnitude,
                 position = raw.p, instance = instance,
@@ -1368,7 +1554,7 @@ function PetSim99:_readSnapshot(probe, active)
         end
     end
     if probe and #candidates == 0 then
-        error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin BasePart. Stand near event coins and reconnect.", 0)
+        error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin or POS BasePart. Stand near event coins and reconnect.", 0)
     end
     if not current() then error("Pet read canceled before module access.", 0) end
     self._phase = "Reading equipped pets via PetCmds.GetEquipped"
@@ -1608,8 +1794,19 @@ function PetSim99:Assign(target, pets, active)
             local key = tostring(uid)
             if not seen[key] and not assigned[key] then
                 seen[key] = true
-                self:_call("Invoke", "Join Coin", target.id, { uid })
+                local joined = self:_call("Invoke", "Join Coin", target.id, { uid })
                 if not current() then break end
+                if joined ~= true then
+                    if type(joined) ~= "table" then error("Join Coin returned an unsupported acknowledgement; no Farm Coin request sent.", 0) end
+                    local accepted = joined[uid]
+                    if accepted == nil and uid ~= key then accepted = joined[key] end
+                    if not current() then break end
+                    if accepted ~= true then
+                        self.Reason = "Join Coin did not accept an equipped pet; no farm request sent for that pet."
+                        if type(accepted) == "string" then self.Reason ..= " " .. accepted:sub(1, 300) end
+                        continue
+                    end
+                end
                 self:_call("Fire", "Farm Coin", target.id, uid)
                 count += 1
                 self._counts.FarmDispatches += 1
@@ -1747,6 +1944,10 @@ function Policy.option(key: string, value: any): (any, string?)
         if value == "Single" or value == "Triple" or value == "Octuple" then return value, nil end
         return nil, "Choose Single, Triple or Octuple."
     end
+    if key == "MachineTravelMode" then
+        if value == "Walk" or value == "Off" then return value, nil end
+        return nil, "Choose Walk or Off for machine travel."
+    end
     if key == "Area" or key == "NameFilter" or key == "EggName" or key == "ConversionSpecies" then
         if type(value) ~= "string" then
             return nil, "Expected text."
@@ -1804,6 +2005,7 @@ local Jobs = __require("Jobs.luau")
 local Interface = __require("Interface.luau")
 local PetSim99 = __require("PetSim99.luau")
 local PetCare = __require("PetCare.luau")
+local MachineNavigation = __require("MachineNavigation.luau")
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -1819,6 +2021,11 @@ function Runtime.new(player, parent)
             Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "",
             CareStatus = "Pet tools idle — click Load pet tools", HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
     }, Runtime)
+    self.Navigator = MachineNavigation.new(player, function(message)
+        if not self.Alive then return end
+        self.State.CareStatus = message
+        self:Publish()
+    end)
     self.Ui = Interface.mount({
         parent = parent, name = Config.Name, version = Config.Version, options = self.Options,
         onChange = function(key, value) return self:SetOption(key, value) end,
@@ -1827,6 +2034,7 @@ function Runtime.new(player, parent)
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
         self.Jobs:cancel("care")
+        self.Navigator:Stop()
         self:StopNavigation()
         self.LastAssignment = nil
         self.NextAt = {}
@@ -1918,6 +2126,7 @@ end
 function Runtime:PrepareCare()
     for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
     self.Jobs:cancel("care")
+    self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:Connect(activeJob)
     end, function(ok, result)
@@ -1938,16 +2147,27 @@ function Runtime:StartCare(key, manual)
     local character = self.Player.Character
     if not character or not character.Parent then return false, "Wait for your character to load." end
     local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
-    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+    local travel = self.Options.MachineTravelMode == "Walk" and key ~= "AutoHatch"
+    local timeout = Config.RequestTimeout + (if travel then Config.TravelTimeout else 0)
+    local started = self.Jobs:start("care", timeout, function(activeJob)
         local function current()
             return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
                 and (manual or self.Options[key])
         end
         if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
-        return self.Care:Convert(if key == "AutoGold" then "Gold" else "Rainbow", species, current)
+        local variant = if key == "AutoGold" then "Gold" else "Rainbow"
+        if not self.Care:CanConvert(variant, species, current) or not current() then return 0 end
+        if travel then
+            self.Jobs:cancel("AutoFarm")
+            self:StopNavigation()
+            if not self.Navigator:Approach(variant, current) then return 0 end
+        end
+        if not current() then return 0 end
+        return self.Care:Convert(variant, species, current)
     end, function(ok, result)
         self.State.CareStatus = self.Care.Reason
         if not ok then
+            self.Navigator:Stop()
             self.Options[key] = false
             self.State.LastError = key .. ": " .. tostring(result)
             self.State.CareStatus = "Pet operation stopped — see error"
@@ -1955,6 +2175,34 @@ function Runtime:StartCare(key, manual)
         self:Publish()
     end)
     if not started then return false, "A pet operation is still returning; no overlapping request sent." end
+    return true
+end
+
+function Runtime:GoToMachine(variant, openMenu)
+    if not self.Alive then return false, "Suite unloaded." end
+    local character = self.Player.Character
+    if not character or not character.Parent then return false, "Wait for your character to load." end
+    self.Jobs:cancel("AutoFarm")
+    self:StopNavigation()
+    local started = self.Jobs:start("care", Config.TravelTimeout, function(activeJob)
+        self.MachineJourney = activeJob
+        local function current()
+            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+        end
+        if not self.Navigator:Approach(variant, current) or not current() then return false end
+        if openMenu then self.Care:OpenMenu(variant) end
+        return true
+    end, function(ok, result)
+        if not ok then
+            self.Navigator:Stop()
+            self.State.LastError = "Machine travel: " .. tostring(result)
+            self.State.CareStatus = "Machine travel stopped — see error"
+        elseif result then
+            self.State.CareStatus = "Arrived at " .. variant .. " machine"
+        end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping journey started." end
     return true
 end
 
@@ -1983,6 +2231,13 @@ end
 
 function Runtime:Step()
     self:StepCare()
+    if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
+        or (self.MachineJourney and self.MachineJourney())) then
+        self.Jobs:cancel("AutoFarm")
+        self:StopNavigation()
+        self:Publish()
+        return
+    end
     if not self.Ready then
         local now = os.clock()
         if now >= (self.NextPublish or 0) and (self.Jobs:busy("connect") or self.Jobs:busy("care")) then
@@ -2045,7 +2300,7 @@ function Runtime:Step()
             if count > 0 then
                 self.LastAssignment = { Id = target.id, Pets = signature, Time = os.clock() }
             end
-            return { Status = if count > 0 then "Farm requests sent; waiting for game response." else "No additional pet dispatches needed.", Target = title,
+            return { Status = if count > 0 then "Farm requests sent; waiting for game response." else self.Adapter.Reason, Target = title,
                 Farmed = self.State.Farmed + count }
         end, function(ok, result) self:FeatureResult("AutoFarm", ok, result) end)
     end
@@ -2155,15 +2410,19 @@ function Runtime:SetOption(key, value)
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
-            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then self.Jobs:cancel("care") end
+            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then
+                self.Jobs:cancel("care")
+                self.Navigator:Stop()
+            end
             if key == "AutoFarm" or key == "WalkToTarget" then self:StopNavigation() end
         else
             self.Failures[key] = 0
             self.NextAt[key] = 0
         end
     end
-    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" then
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" then
         self.Jobs:cancel("care")
+        self.Navigator:Stop()
     end
     if key == "AutoFarm" or key == "FarmMode" or key == "Area" or key == "NameFilter" or key == "Radius" then
         self.Jobs:cancel("AutoFarm")
@@ -2200,6 +2459,7 @@ end
 
 function Runtime:StopAll()
     self.Jobs:cancelAll()
+    self.Navigator:Stop()
     self:StopNavigation()
     self.LastAssignment = nil
     self.NextAt = {}
@@ -2292,8 +2552,14 @@ function Runtime:Action(action)
     elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
     elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
     elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")
-    elseif action == "OpenGoldMenu" then return self.Care:OpenMenu("Gold")
-    elseif action == "OpenRainbowMenu" then return self.Care:OpenMenu("Rainbow")
+    elseif action == "GoGoldMachine" then return self:GoToMachine("Gold", false)
+    elseif action == "GoRainbowMachine" then return self:GoToMachine("Rainbow", false)
+    elseif action == "OpenGoldMenu" then
+        if self.Options.MachineTravelMode == "Walk" then return self:GoToMachine("Gold", true) end
+        return self.Care:OpenMenu("Gold")
+    elseif action == "OpenRainbowMenu" then
+        if self.Options.MachineTravelMode == "Walk" then return self:GoToMachine("Rainbow", true) end
+        return self.Care:OpenMenu("Rainbow")
     elseif action == "OpenInventory" then return self.Care:OpenMenu("Inventory")
     elseif action == "ClearError" then self.State.LastError = ""; self:Publish()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)

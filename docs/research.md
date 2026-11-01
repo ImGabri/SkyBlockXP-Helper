@@ -244,3 +244,43 @@ already-known PS99 example excluding that place. No readable current-event sourc
 established compatibility. Official updates99/100 confirm the event and eggs but
 do not publish this scripting contract or machine chance table. Fandom machine
 pages returnedHTTP402; no current chance guarantee was inferred.
+
+## v0.7.1 — supplied commit and machine-range failure
+
+The user supplied [commit89e9fc1](https://github.com/ImGabri/SkyBlockXP-Helper/commit/89e9fc1a4a61f5608239116fe175ea372cd536ed).
+It and parent713adef were merged without replacing local error-recovery work.
+Passive preflight, worker visibility,30-second request budget and phase reporting
+are preserved. The [shared chat](https://chatgpt.com/share/6ae769b6-03a4-83ed-9da7-5fc26b738011?ogimg=plain)
+was fetched successfully. Its actual diagnostic reports an initialization timeout
+with uninspected/not-loaded reports; its proposed hotfix is explicitly diagnostic,
+not proof of working automation. No embedded hotfix code was executed.
+
+The user separately reports a real machine-distance rejection. Review found that
+v0.6 sent conversions without travel, discarded returned server reasons and
+reserved rejected pet UIDs. v0.7.1 preserves bounded textual error reasons. An
+explicit false-plus-"too far" reply stops automation but leaves the feature and
+unconsumed batch available for manual retry. Unknown/uncertain replies retain
+reservations and do not automatically retry.
+
+A [pinned Classic-oriented sample](https://github.com/s1mpl33222-glitch/lua-obfuscator-samples/blob/5c416c388b241a09ed4aaedb72c5bae7850e43a0/samples/plain_Lua___open-source_code/1563864953193238612_VYHUB.lua)
+uses RebornBalance/RebornLock and loaded paths
+`__MAP.Interactive["Gold Machine"].Pad` / `["Rainbow Machine"].Pad`.
+Its interface facts informed the new original navigation module. The sample's
+identity changes, private remote resolution and implementation were not copied,
+executed or incorporated. Its author-chosen reach thresholds do not establish
+server range. Our8-stud arrival check is a conservative local target only.
+
+Normal pathfinding/walking now precedes conversion in Walk mode. The suite checks
+eligibility before traveling and again on arrival, pauses competing farm movement,
+and halts on cancellation, respawn, timeout, moved/unloaded pads or failed paths.
+No hardcoded coordinates, teleport, machine unlock, range spoof or guard bypass
+is used. Another world must be loaded normally by the player. Go-to-machine
+shortcuts do not spend pets; machine-menu shortcuts approach first in Walk mode.
+
+That sample also documents optional raw lock flag `l`, gifts, coin health `h`,
+loaded `POS` markers and per-UID Join Coin acceptance. The guarded adapter retains
+legacy shapes while accepting those concrete alternatives, rejects conflicting
+health values, and sends Farm Coin only after explicit true acceptance. Join
+strings remain rejection text. These extensions do not establish live network
+acceptance. Current public loading, server responses, actual machine/path layouts
+and farming success still require an executed client test.
