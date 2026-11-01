@@ -272,7 +272,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Fail if the existing bundle is missing or stale")
     parser.add_argument("--source-dir", type=Path, default=root / "src/client")
-    parser.add_argument("--output", type=Path, default=root / "dist/PetSimAutomation.lua")
+    parser.add_argument("--output", type=Path, default=root / "dist/PetSim99AutomationSuite.lua")
     args = parser.parse_args(argv)
     try:
         result = build_bundle(args.source_dir)

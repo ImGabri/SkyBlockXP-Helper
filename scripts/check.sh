@@ -14,4 +14,4 @@ subprocess.run(['.tools/bin/luau-compile', *sources], check=True, stdout=subproc
 print(f'Compiled {len(sources)} source/bundle files.')
 PY
 mkdir -p build
-.tools/bin/rojo build default.project.json -o build/PetSimAutomation.rbxlx
+.tools/bin/rojo build default.project.json -o build/PetSim99AutomationSuite.rbxlx

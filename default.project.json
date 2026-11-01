@@ -6,7 +6,7 @@
       "$className": "StarterPlayer",
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
-        "PetSimAutomation": {
+        "PetSim99AutomationSuite": {
           "$path": "src/client"
         }
       }

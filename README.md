@@ -81,7 +81,7 @@ report failure when rejected by the executor.
 
 ## Use the development build
 
-The file to execute is **[`dist/PetSimAutomation.lua`](dist/PetSimAutomation.lua)**.
+The file to execute is **[`dist/PetSim99AutomationSuite.lua`](dist/PetSim99AutomationSuite.lua)**.
 
 1. Enter the Classic Event, equip pets and stand beside loaded coins.
 2. Rejoin first if an older build caused network-warning spam. Open the file,
@@ -121,7 +121,7 @@ bash scripts/check.sh
 Setup requires Bash, curl, Python 3 and `sha256sum`. Official Luau 0.745 and
 Rojo 7.7.1 archives are checked against pinned SHA-256 hashes. There are no Python
 package dependencies. `check.sh` verifies bundle freshness, runs the Python and
-Luau tests, compiles all sources and builds `build/PetSimAutomation.rbxlx`.
+Luau tests, compiles all sources and builds `build/PetSim99AutomationSuite.rbxlx`.
 
 The generated `dist` script is kept with the sources. After editing Luau, rerun
 `python3 scripts/build.py`; `--check` fails when the bundle is stale. The build
@@ -130,9 +130,9 @@ remain Roblox APIs; the standalone Luau CLI cannot emulate a real game.
 
 ## Roblox Studio
 
-Open `build/PetSimAutomation.rbxlx` and select Play to inspect the UI and local
+Open `build/PetSim99AutomationSuite.rbxlx` and select Play to inspect the UI and local
 utilities. The client script and child modules are mapped under
-`StarterPlayer > StarterPlayerScripts > PetSimAutomation` by Rojo. An empty
+`StarterPlayer > StarterPlayerScripts > PetSim99AutomationSuite` by Rojo. An empty
 Studio place cannot validate the Classic Event's internals or Solara support.
 
 ## Source layout
