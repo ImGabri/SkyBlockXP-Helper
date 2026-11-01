@@ -160,7 +160,11 @@ end
 function Runtime:StepCare()
     if not self.Alive then return end
     local now = os.clock()
-    for _, key in ipairs({ "AutoRainbow", "AutoGold", "AutoHatch" }) do
+    local features = { "AutoRainbow", "AutoGold", "AutoHatch" }
+    local cursor = self.CareCursor or 1
+    for offset = 0, #features - 1 do
+        local index = (cursor + offset - 1) % #features + 1
+        local key = features[index]
         if self.Options[key] and not self.Jobs:busy("care") and now >= (self.NextAt[key] or 0) then
             local interval = if key == "AutoHatch" then self.Options.HatchInterval else self.Options.ConversionInterval
             self.NextAt[key] = now + interval
@@ -170,6 +174,8 @@ function Runtime:StepCare()
                 self.State.LastError = reason
                 self:Publish()
             end
+            self.CareCursor = index % #features + 1
+            return
         end
     end
 end

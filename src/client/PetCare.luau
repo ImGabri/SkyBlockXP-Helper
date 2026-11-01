@@ -26,8 +26,13 @@ function PetCare:_report()
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
 
+function PetCare:_occupied()
+    if self._busy and coroutine.status(self._busy) == "dead" then self._busy = nil end
+    return self._busy ~= nil
+end
+
 function PetCare:Connect(active)
-    if self._busy then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
+    if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
     local generation = self._generation
@@ -87,12 +92,13 @@ end
 function PetCare:_run(key, active, work)
     if active and not active() then return 0 end
     if self._destroyed or not samePlace() or not self._api or not self.Supported[key] then error(self.Reason, 0) end
-    if self._busy then error("Another pet operation is still returning; no overlapping request sent.", 0) end
+    if self:_occupied() then error("Another pet operation is still returning; no overlapping request sent.", 0) end
     local generation = self._generation
     local function current() return not self._destroyed and generation == self._generation and samePlace() and (not active or active()) end
-    self._busy = true
+    local owner = coroutine.running()
+    self._busy = owner
     local ok, result = pcall(work, current)
-    self._busy = false
+    if self._busy == owner then self._busy = nil end
     if not current() then return 0 end
     if not ok then error(result, 0) end
     return result
