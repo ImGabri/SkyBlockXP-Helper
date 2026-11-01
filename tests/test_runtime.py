@@ -280,60 +280,83 @@ assert(not runtime.Options.HeavenChestAssist)
 runtime:Destroy()
 ''')
 
-    def test_heaven_island_sweep_clicks_scene_without_coin_protocol(self):
+    def test_local_target_scan_runs_on_load_without_networking(self):
         self.run_case('''
-local moved, clicks = {}, 0
-workspace.CurrentCamera = { ViewportSize = { X = 1200, Y = 800 } }
-mousemoveabs = function(x, y) table.insert(moved, { x, y }) end
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0)
+assert(runtime.State.HeavenTargetCount == 0)
+assert(string.find(runtime.State.HeavenScanStatus, "Workspace listing unavailable", 1, true))
+runtime:Destroy()
+''')
+
+    def test_targeted_farm_selects_named_small_breakable_and_excludes_boss_chest(self):
+        self.run_case('''
+local function part(name, x)
+    local object = { Name = name, Parent = workspace, Position = { X = x, Y = 0, Z = 0 } }
+    function object:IsA(kind) return kind == "BasePart" end
+    function object:IsDescendantOf(parent) return self.Parent == parent end
+    return object
+end
+local small = part("Heaven Island Vault", 15)
+local giant = part("Heaven Island Angel Chest", 12)
+local coin = part("Heaven Island Coin Pile", 16)
+rootPart.Position = { X = 0, Y = 0, Z = 0 }
+workspace.GetDescendants = function() return { small, giant, coin } end
+workspace.CurrentCamera = {
+    ViewportSize = { X = 1200, Y = 800 },
+    WorldToViewportPoint = function(_, position)
+        return { X = position.X * 10, Y = 320, Z = 1 }, true
+    end
+}
+local moves, clicks = {}, 0
+mousemoveabs = function(x, y) table.insert(moves, {x, y}) end
 mouse1click = function() clicks += 1 end
 isrbxactive = function() return true end
+local found, report = runtime:Action("ScanHeavenTargets")
+assert(found and string.find(report, "2 nearby", 1, true), report)
 assert(runtime:Action("StartHeavenSweep"))
-assert(runtime.Options.HeavenIslandSweep and not runtime.Ready)
 runtime:Step()
-assert(clicks == 1 and #moved == 1 and moved[1][1] < 780, "screen sweep first click missing or covered UI")
-assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0, "sweep touched game network module")
-runtime:Step()
-assert(clicks == 1, "sweep ignored click interval")
+assert(#moves == 1 and clicks == 0, "targeted input did not move before clicking")
 clock += 1
 runtime:Step()
-assert(clicks == 2 and #moved == 2 and moved[2][1] ~= moved[1][1], "screen sweep failed to visit next target")
+assert(clicks == 1, "did not click targeted breakable")
+clock += 2
+runtime:Step()
+assert(#moves == 2 and moves[2][1] ~= moves[1][1], "did not target a second individual object")
+clock += 1
+runtime:Step()
+assert(clicks == 2, "second breakable not clicked")
+clock += 2
+runtime:Step()
+assert(clicks == 2, "clicked same object twice instead of waiting for new instances")
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0)
 assert(runtime:Action("StopHeavenSweep"))
-clock += 2
-runtime:Step()
-assert(clicks == 2, "stopped screen sweep kept clicking")
-assert(ui.State.HeavenSweepClicks == 2)
 runtime:Destroy()
 ''')
 
-    def test_heaven_island_sweep_pauses_when_roblox_unfocused(self):
+    def test_zero_detected_targets_never_emits_blind_screen_clicks(self):
         self.run_case('''
-workspace.CurrentCamera = { ViewportSize = { X = 1000, Y = 700 } }
-mousemoveabs = function() error("window was inactive") end
-mouse1click = function() error("window was inactive") end
-isrbxactive = function() return false end
+workspace.GetDescendants = function() return {} end
+workspace.CurrentCamera = {
+    ViewportSize = { X = 1200, Y = 800 },
+    WorldToViewportPoint = function() error("no targets should be projected") end
+}
+local clicks = 0
+mousemoveabs = function() error("no targets may be clicked") end
+mouse1click = function() clicks += 1 end
 assert(runtime:Action("StartHeavenSweep"))
-runtime:Step()
-assert(runtime.Options.HeavenIslandSweep, "unfocused status incorrectly stopped the sweep")
-assert(ui.State.HeavenSweepClicks == nil and adapter.NativeCalls == 0)
+assert(runtime.State.HeavenTargetCount == 0)
+for i = 1, 5 do clock += 2; runtime:Step() end
+assert(clicks == 0 and runtime.Options.HeavenIslandSweep)
 runtime:Destroy()
 ''')
 
-    def test_heaven_island_sweep_fallback_clicks_cursor_when_move_missing(self):
+    def test_targeted_farm_requires_both_input_primitives(self):
         self.run_case('''
-workspace.CurrentCamera = { ViewportSize = { X = 1200, Y = 800 } }
 mousemoveabs = nil
-mouse1click = function() _G.clicks = (_G.clicks or 0) + 1 end
-player.GetMouse = function() return { X = 300, Y = 500 } end
-assert(runtime:Action("StartHeavenSweep"))
-runtime:Step()
-assert(ui.State.HeavenSweepClicks == nil)
-clock += 4
-runtime:Step()
-assert(ui.State.HeavenSweepClicks == 1 and runtime.Options.HeavenIslandSweep)
-assert(runtime:Action("StopAll") == nil)
-clock += 2
-runtime:Step()
-assert(ui.State.HeavenSweepClicks == 1)
+mouse1click = function() end
+local ok, err = runtime:Action("StartHeavenSweep")
+assert(not ok and string.find(err, "mousemoveabs", 1, true))
+assert(not runtime.Options.HeavenIslandSweep)
 runtime:Destroy()
 ''')
 

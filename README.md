@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.9.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.10.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.9.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.10.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -116,35 +116,36 @@ If the chest reuses the same instance or clicking doesn't select it, the helper
 will not auto-retarget. It does not farm every breakable on Heaven Island or
 confirm any reward. It does not bypass game limits.
 
-## v0.9.0: Heaven Island screen-click AutoFarm (no game data required)
+## v0.10.0: target-aware Heaven Island AutoFarm
 
-**Start Heaven Island autofarm** in the Farm tab starts a separate, input-only
-farming mode. No Get Coins, Save.Get, coin model enumeration or pet module
-loading is required. When the executor provides `mousemoveabs` and
-`mouse1click`, the suite moves through 30 locations covering the left/center
-gameplay viewport and clicks one location every 0.35–4 seconds according to the
-Farm interval setting (default 0.75). It never automatically teleports or
-moves the character. Click attempts are counted in Status, not confirmed
-rewards. The right-hand suite UI is excluded from the sweep positions.
+On startup, the suite performs a *local-only*, passive scan of replicated
+Workspace objects. It looks for nearby individually named or tagged **vaults,
+safes, gifts, presents, small chests, coins, coin piles and crates**, including
+models in `__THINGS.Coins` if that folder is populated. This does **not**
+load any game modules, invoke game remotes or use Save.Get. The target count
+and category breakdown appear on Status; click **SCAN small breakables NOW**
+to refresh on demand. A running farm refreshes the scan every seven seconds.
 
-**Instructions:** Stand on **Heaven Island** (not Heaven's Gate), equip pets
-normally and face the area with the small chests, vaults, presents and coin
-piles. Close Teleport, Inventory and other game menus. Press **START Heaven
-Island autofarm (small breakables)**. Use **STOP Heaven Island autofarm** or
-**STOP ALL** whenever needed. The old legacy "Get Coins" probe should not be
-used for this mode. If `mousemoveabs` is missing, the same START button
-runs a fallback click-at-cursor mode after a 3-second aiming countdown.
-You must move the cursor between targets manually in that fallback.
+In Heaven Island (not Heaven's Gate), equip pets, close the Teleport menu,
+face the small breakables, then click **START Heaven Island AutoFarm (detected
+targets)**. The script only moves the cursor to a candidate with a visible
+world-to-screen position in the left gameplay view and clicks **once per
+individual object instance**. It waits for the cursor to settle in a
+separate step; it never clicks a fixed screen pattern. Objects containing
+known giant/Angel/Heaven's Gate chest names, large models, pets and effects
+are excluded. **STOP Heaven Island AutoFarm** or **STOP ALL** disables it.
 
-The screen-click mode does not know which items are breakables, whether
-clicking them actually sends pets, or whether a reward was collected. It
-tries clicks across the visible scene. When supported, it skips clearly
-named giant/Heaven's Gate chest parts in an ordinary camera raycast; this
-is not a guarantee against hitting an unnamed boss chest. Keep big chests
-and interactive UI out of the swept game view. It pauses without focus
-when `isrbxactive` is provided. It never bypasses game checks.
+This is a best-effort input-only targeting system, **not proven game-side
+farming**. Generic/unreplicated breakables or decorative objects with
+breakable-like names cannot reliably be distinguished from actual clickable
+breakables without a verified game API. The scanner intentionally makes
+**zero clicks** if it detects no eligible named/tagged targets, rather than
+guessing coordinates. A detected object or input click does not confirm
+pets attacked it or rewards were collected. The executor must support both
+`mousemoveabs` and `mouse1click`; the failing Get Coins command and pet
+tools are not required.
 
-## Eggs, gold and rainbow
+## Eggs, gold and rainbow## Eggs, gold and rainbow
 
 1. In **Pets**, click **Load pet tools**. This loads the public Library APIs
    independently of the coin compatibility check; it does not send a remote probe.
