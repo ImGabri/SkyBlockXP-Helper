@@ -199,6 +199,34 @@ assert(not pcall(care.Hatch, care, "Starter Egg", "Single"))
 assert(#calls == 1, "rejected feature sent another request")
 ''')
 
+    def test_distance_rejection_preserves_server_message_and_allows_manual_retry(self):
+        self.run_case('''
+care:Connect()
+careHook = function() return false, "You are too far away from the machine!" end
+local ok, message = pcall(care.Convert, care, "Gold", "cat")
+assert(not ok)
+contains(tostring(message), "too far away from the machine")
+assert(care.Supported.AutoGold, "recoverable range rejection permanently disabled gold")
+local rejected = calls[1].args[1]
+careHook = nil
+assert(care:Convert("Gold", "cat") == 1)
+local retried = calls[2].args[1]
+for i = 1, 6 do assert(rejected[i] == retried[i], "distance rejection stranded unconsumed pet UIDs") end
+''')
+
+    def test_unknown_rejection_message_is_visible_but_does_not_release_uncertain_pets(self):
+        self.run_case('''
+care:Connect()
+careHook = function() return false, "Machine request denied" end
+local ok, message = pcall(care.Convert, care, "Rainbow", "cat")
+assert(not ok)
+contains(tostring(message), "Machine request denied")
+careHook = nil
+care:Connect()
+assert(care:Convert("Rainbow", "cat") == 0, "uncertain rejected pets were automatically reused")
+assert(#calls == 1)
+''')
+
     def test_canceled_calls_and_wrong_place_send_nothing(self):
         self.run_case('''
 care:Connect()
