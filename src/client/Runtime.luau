@@ -218,7 +218,13 @@ end
 local function heavenDistance(a, b)
     if not a or not b then return nil end
     local ok, distance = pcall(function() return (a - b).Magnitude end)
-    return if ok and type(distance) == "number" then distance else nil
+    if ok and type(distance) == "number" then return distance end
+    -- Also accept numeric XYZ vectors from benign test doubles and proxy values.
+    local valid = type(a.X) == "number" and type(a.Y) == "number" and type(a.Z) == "number"
+        and type(b.X) == "number" and type(b.Y) == "number" and type(b.Z) == "number"
+    if not valid then return nil end
+    local dx, dy, dz = a.X - b.X, a.Y - b.Y, a.Z - b.Z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 local function heavenExcluded(object)
     local depth, node = 0, object
