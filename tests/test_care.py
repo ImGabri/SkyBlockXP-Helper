@@ -79,6 +79,35 @@ assert(care.Supported.AutoHatch and care.Supported.AutoGold and care.Supported.A
 assert(nativeCalls == 1 and #calls == 0, "pet tools invoked a remote while loading")
 ''')
 
+    def test_direct_mode_loads_known_child_modules_and_no_facade(self):
+        self.run_case('''
+client.ClassName = "ModuleScript"
+local saveModule = instance("Save", "ModuleScript", client)
+local directoryModule = instance("Directory", "ModuleScript", library)
+exports[saveModule] = facade.Save
+exports[directoryModule] = directory
+assert(nativeCalls == 0)
+care:Connect(nil, "Direct")
+assert(care.Supported.AutoHatch and care.Supported.AutoGold and care.Supported.AutoRainbow, care.Reason)
+assert(nativeCalls == 4 and #calls == 0, "Direct mode must load exactly four modules with no requests")
+contains(care.Report, "Module path mode: Direct")
+''')
+
+    def test_direct_mode_reports_stalled_first_child_module(self):
+        self.run_case('''
+client.ClassName = "ModuleScript"
+local original = require
+require = function(module)
+    if module == networkModule then coroutine.yield("child module loading") end
+    return original(module)
+end
+local worker = coroutine.create(function() care:Connect(nil, "Direct") end)
+assert(coroutine.resume(worker))
+contains(care.Report, "Loading Library.Client.Network directly")
+assert(nativeCalls == 0 and #calls == 0)
+assert(coroutine.close(worker))
+''')
+
     def test_hatch_modes_have_exact_legacy_arguments(self):
         for mode, triple, octuple in [("Single", "false", "false"), ("Triple", "true", "false"), ("Octuple", "false", "true")]:
             with self.subTest(mode=mode):

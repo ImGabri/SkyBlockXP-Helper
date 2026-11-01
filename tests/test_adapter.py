@@ -245,6 +245,35 @@ assert(nativeCalls == 1, "public facade loaded internal modules separately")
 contains(adapter.Report, "ReplicatedStorage.Library")
 ''')
 
+    def test_explicit_direct_mode_skips_hanging_facade_and_optional_world(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+client.ClassName = "ModuleScript"
+exports[library] = { Network = {} } -- direct mode must not read this facade
+local adapter = PetSim99.new():Connect(nil, "Direct")
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(nativeCalls == 2, "Direct mode must load only Network and PetCmds for farm probe")
+contains(adapter.Report, "Module path mode: Direct")
+assert(#calls > 0 and calls[1].command == "Get Coins")
+''')
+
+    def test_direct_module_loader_reports_suspended_step_without_fallback(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+client.ClassName = "ModuleScript"
+local original = require
+require = function(module)
+    if module == networkModule then coroutine.yield("network loading") end
+    return original(module)
+end
+local adapter = PetSim99.new()
+local worker = coroutine.create(function() adapter:Connect(nil, "Direct") end)
+assert(coroutine.resume(worker))
+contains(adapter.Report, "Loading Library.Client.Network ModuleScript directly")
+assert(#calls == 0 and nativeCalls == 0, "loading should not send a remote or fall back")
+assert(coroutine.close(worker))
+''')
+
     def test_original_game_module_loader_is_preferred_when_available(self):
         self.run_case('''
 library.ClassName = "ModuleScript"
