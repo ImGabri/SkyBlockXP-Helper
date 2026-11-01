@@ -1022,7 +1022,8 @@ end
 function PetCare:_report()
     self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nModule path mode: " .. (self._mode or "Facade")
         .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
-        .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
+        .. "\nPet-tool provider: " .. (if self._mode == "Direct" then "Library.Client + Library.Directory child modules" else "ReplicatedStorage.Library facade")
+        .. " (public game modules). Legacy commands; current game acceptance unverified."
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
