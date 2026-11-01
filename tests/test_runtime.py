@@ -175,6 +175,9 @@ function care:Convert(variant, species, active)
     return 1
 end
 function care:OpenMenu(kind) self.MenuCalls += 1; self.LastMenu = kind; return true end
+function care:NextChoice(kind, previous)
+    return if kind == "Egg" then "Starter Egg" else "cat", "Chosen from loaded directory"
+end
 function care:Destroy() self.Destroyed = true end
 local CareStub = { new = function() return care end }
 
@@ -256,6 +259,17 @@ assert(runtime:Action("OpenEggMenu") and care.LastMenu == "Egg")
 assert(runtime:Action("OpenInventory") and care.LastMenu == "Inventory")
 runtime.State.LastError = "old error"
 assert(runtime:Action("ClearError") and runtime.State.LastError == "")
+runtime:Destroy()
+''')
+
+    def test_catalog_buttons_apply_canonical_settings_without_spending(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+assert(runtime:Action("NextEgg"))
+assert(runtime.Options.EggName == "Starter Egg")
+assert(runtime:Action("NextSpecies"))
+assert(runtime.Options.ConversionSpecies == "cat")
+assert(care.HatchCalls == 0 and care.ConvertCalls == 0)
 runtime:Destroy()
 ''')
 

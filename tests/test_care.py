@@ -90,6 +90,29 @@ local args = calls[1].args
 assert(args.n == 3 and args[1] == "Starter Egg" and args[2] == {triple} and args[3] == {octuple})
 ''')
 
+    def test_catalog_selection_cycles_real_directory_choices_without_remote_calls(self):
+        self.run_case('''
+care:Connect()
+assert(type(care.NextChoice) == "function", "directory selection missing")
+local egg = care:NextChoice("Egg", "")
+assert(egg == "Starter Egg")
+assert(care:NextChoice("Egg", egg) == egg)
+local species = care:NextChoice("Species", "")
+assert(species == "cat")
+assert(care:NextChoice("Species", species) == "dog")
+assert(#calls == 0)
+''')
+
+    def test_numeric_species_directory_keys_can_be_selected_by_id(self):
+        self.run_case('''
+directory.Pets[12] = directory.Pets.cat
+directory.Pets.cat = nil
+for _, pet in ipairs(inventory) do pet.id = 12 end
+care:Connect()
+assert(care:Convert("Gold", "12") == 1)
+assert(#calls == 1)
+''')
+
     def test_unknown_premium_unaffordable_eggs_and_invalid_modes_send_nothing(self):
         for change, egg, mode in [('', 'Unknown', 'Single'), ('directory.Eggs["Starter Egg"].currency = "Robux"', 'Starter Egg', 'Single'), ('save.Coins = 0', 'Starter Egg', 'Single'), ('', 'Starter Egg', 'Ten')]:
             with self.subTest(change=change, egg=egg, mode=mode):
