@@ -167,6 +167,14 @@ function care:Hatch(egg, mode, active)
     self.Counts.HatchRequests += 1
     return 1
 end
+function care:CanHatch(egg, mode, active)
+    return self.HasCurrency ~= false and (not active or active())
+end
+care.SelectedEggTarget = { Name = "Loaded fixture egg" }
+function care:GetEggTarget(egg, active)
+    if active and not active() then return nil end
+    return self.SelectedEggTarget
+end
 function care:Convert(variant, species, active)
     self.ConvertCalls += 1
     if careHook then careHook("Convert", active) end
@@ -193,6 +201,10 @@ function navigation:Approach(variant, active)
     return not active or active()
 end
 function navigation:Stop() self.Stops += 1 end
+function navigation:ApproachEgg(target, active)
+    self.EggTarget = target
+    return self:Approach("Egg", active)
+end
 local NavigationStub = { new = function() return navigation end }
 
 local function contains(text, expected)
@@ -298,6 +310,76 @@ runtime:SetOption("ConversionSpecies", "Cat")
 care.HasBatch = false
 assert(runtime:Action("GoldOnce"))
 assert(navigation.Calls == 0 and care.ConvertCalls == 0, "walk started without an eligible six-pet batch")
+runtime:Destroy()
+''')
+
+    def test_hatch_walks_to_selected_egg_before_buying_and_failure_sends_nothing(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+navigationHook = function() error("egg path blocked") end
+assert(runtime:Action("HatchOnce"))
+assert(navigation.Calls == 1 and care.HatchCalls == 0, "hatch ignored failed egg approach")
+navigationHook = nil
+assert(runtime:Action("HatchOnce"))
+assert(navigation.Calls == 2 and navigation.EggTarget == care.SelectedEggTarget)
+assert(care.HatchCalls == 1)
+runtime:Destroy()
+''')
+
+    def test_low_currency_waits_and_auto_hatch_resumes_when_ready(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+care.HasCurrency = false
+assert(runtime:SetOption("AutoHatch", true))
+runtime:Step()
+assert(care.HatchCalls == 0 and navigation.Calls == 0 and runtime.Options.AutoHatch)
+care.HasCurrency = true
+clock += Config.Options.HatchInterval + 1
+runtime:Step()
+assert(care.HatchCalls == 1 and runtime.Options.AutoHatch)
+runtime:Destroy()
+''')
+
+    def test_dead_character_cannot_mutate_pets_and_auto_hatch_waits_for_life(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+runtime:SetOption("ConversionSpecies", "Cat")
+runtime:SetOption("MachineTravelMode", "Off")
+humanoid.Health = 0
+assert(not runtime:Action("HatchOnce"))
+assert(not runtime:Action("GoldOnce"))
+assert(care.HatchCalls == 0 and care.ConvertCalls == 0 and navigation.Calls == 0)
+runtime:SetOption("AutoHatch", true)
+runtime:Step()
+assert(care.HatchCalls == 0 and runtime.Options.AutoHatch)
+humanoid.Health = 100
+runtime:Step()
+assert(care.HatchCalls == 1)
+runtime:Destroy()
+''')
+
+    def test_death_during_native_pet_read_invalidates_the_mutation_token(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+careHook = function(kind) if kind == "Hatch" then humanoid.Health = 0 end end
+runtime:Action("HatchOnce")
+assert(care.Counts.HatchRequests == 0, "death during a native read allowed spending")
+runtime:Destroy()
+''')
+
+    def test_selected_egg_go_action_and_manual_hatch_travel_setting(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+assert(runtime:Action("GoSelectedEgg"))
+assert(navigation.Calls == 1 and navigation.EggTarget == care.SelectedEggTarget and care.HatchCalls == 0)
+assert(runtime:SetOption("EggTravelMode", "Off"))
+runtime:Action("HatchOnce")
+assert(navigation.Calls == 1 and care.HatchCalls == 1)
 runtime:Destroy()
 ''')
 
@@ -432,6 +514,7 @@ setclipboard = function(value) copied = value end
 assert(runtime:Action("CopyDiagnostics"))
 contains(copied, Config.Name)
 contains(copied, "Care fixture")
+contains(copied, "Navigation stage:")
 runtime:SetOption("Fullbright", true)
 teleport.Teleport = function() error("teleport rejected") end
 assert(not runtime:Action("Rejoin"))
