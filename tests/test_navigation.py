@@ -215,13 +215,14 @@ assert(#moves==2 and moves[2]==root.Position)
 ''')
 
     def test_respawn_or_dead_character_cancels_followup_walking(self):
-        for change in ['player.Character=instance("Replacement","Model",workspace)', 'humanoid.Health=0']:
+        for change, expected in [('player.Character=instance("Replacement","Model",workspace)', 1), ('humanoid.Health=0', 2)]:
             with self.subTest(change=change):
                 self.run_case('''
 autoMove=false
 waitHook=function() ''' + change + ''' end
 assert(navigation:Approach("Gold")==false)
-assert(#moves==2 and moves[2]==root.Position)
+assert(#moves==''' + str(expected) + ''')
+if #moves==2 then assert(moves[2]==root.Position) end
 ''')
 
     def test_jump_waypoints_are_executed_before_arrival(self):
@@ -272,6 +273,49 @@ assert(#moves==0)
 computeHook=function() ''' + change + ''' end
 assert(navigation:Approach("Gold")==false,"replaced rig component allowed false arrival")
 assert(#moves==0)
+''')
+
+    def test_halt_after_root_replacement_uses_current_root_position(self):
+        self.run_case('''
+autoMove=false
+local replacement
+waitHook=function()
+    root.Name="OldRoot"
+    replacement=instance("HumanoidRootPart","Part",character)
+    replacement.Position=Vector3.new(25,0,0)
+end
+assert(navigation:Approach("Gold")==false)
+assert(#moves==2 and moves[2]==replacement.Position,"halt drove current rig toward a stale root position")
+''')
+
+    def test_halt_never_commands_a_replaced_humanoid(self):
+        self.run_case('''
+autoMove=false
+waitHook=function()
+    local replacement=instance("ReplacementHumanoid","Humanoid",character)
+    replacement.Health=100
+    function replacement:MoveTo() error("new humanoid received stale halt") end
+    table.insert(character.Children,1,replacement)
+end
+assert(navigation:Approach("Gold")==false)
+assert(#moves==1,"replaced humanoid still received a movement command")
+''')
+
+    def test_respawn_halt_cannot_command_either_old_or_replacement_rig(self):
+        self.run_case('''
+autoMove=false
+local newMoves=0
+waitHook=function()
+    local replacement=instance("Replacement","Model",workspace)
+    local newRoot=instance("HumanoidRootPart","Part",replacement)
+    newRoot.Position=Vector3.new(500,0,0)
+    local newHumanoid=instance("Humanoid","Humanoid",replacement)
+    newHumanoid.Health=100
+    function newHumanoid:MoveTo() newMoves+=1 end
+    player.Character=replacement
+end
+assert(navigation:Approach("Gold")==false)
+assert(#moves==1 and newMoves==0,"stale cleanup commanded an old or replacement rig")
 ''')
 
     def test_approaches_only_the_selected_loaded_egg_center(self):
