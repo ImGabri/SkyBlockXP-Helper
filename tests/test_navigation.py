@@ -220,6 +220,15 @@ assert(navigation:Approach("Gold"))
 assert(humanoid.Jump==true)
 ''')
 
+    def test_nearby_jump_waypoint_is_not_skipped_as_already_reached(self):
+        self.run_case('''
+waypointHook=function(path)
+    return {{Position=Vector3.new(2,0,0),Action="Jump"},{Position=path.Finish,Action="Walk"}}
+end
+assert(navigation:Approach("Gold"))
+assert(humanoid.Jump==true,"nearby jump action was skipped before the obstacle")
+''')
+
     def test_native_cancellation_owner_releases_after_thread_is_closed(self):
         self.run_case('''
 autoMove=false
