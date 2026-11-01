@@ -464,6 +464,7 @@ function Interface.mount(spec)
     input("Farm", "Target name contains", "NameFilter")
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
+    actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
@@ -518,7 +519,7 @@ function Interface.mount(spec)
     })
     table.insert(renderers, function()
         details.Text = string.format(
-            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
+            "SESSION\n%s\n\nTarget: %s\nEquipped pets: %s\nFarm dispatches: %s\nOrb requests: %s\nLootbag requests: %s\n\nPET TOOLS\n%s\nEgg requests: %s\nGold requests: %s\nRainbow requests: %s\n\nLIVE DIAGNOSTICS\nFarm check: %s\nPet tools: %s\nWorkers:\n%s\n\nCAPABILITIES\n%s\n\nLAST ERROR\n%s",
             tostring(snapshot.Status or "Ready"),
             tostring(snapshot.Target or "None"),
             tostring(snapshot.EquippedPets or 0),
@@ -529,6 +530,9 @@ function Interface.mount(spec)
             tostring(snapshot.HatchRequests or 0),
             tostring(snapshot.GoldRequests or 0),
             tostring(snapshot.RainbowRequests or 0),
+            tostring(snapshot.ProbeStage or "not started"),
+            tostring(snapshot.CareStage or "not started"),
+            tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
         )

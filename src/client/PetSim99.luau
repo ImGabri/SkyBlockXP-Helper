@@ -108,7 +108,7 @@ function PetSim99.new()
 end
 
 function PetSim99:_report()
-    self.Report = (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
+    self.Report = "Probe stage: " .. tostring(self._phase or "not started") .. "\n" .. (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
         .. "\nModule loader: " .. (self._loaderName or "not selected")
         .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
@@ -161,7 +161,11 @@ function PetSim99:_readSnapshot(probe, active)
         return generation == self._generation and not self._destroyed and (not active or active())
     end
     if not current() then error("Coin read canceled before networking.", 0) end
+    self._phase = "Waiting for Network.Invoke(Get Coins) to return"
+    self:_report()
     local returned = table.pack(self:_call("Invoke", "Get Coins"))
+    self._phase = "Validating Get Coins reply"
+    self:_report()
     local records = if returned.n == 1 then returned[1] else nil
     -- Status+payload responses must pass the same concrete coin validation.
     if returned.n == 2 and returned[1] == true and type(returned[2]) == "table" then
@@ -218,6 +222,8 @@ function PetSim99:_readSnapshot(probe, active)
         error("No valid Get Coins record matches a loaded __THINGS.Coins model with a Coin BasePart. Stand near event coins and reconnect.", 0)
     end
     if not current() then error("Pet read canceled before module access.", 0) end
+    self._phase = "Reading equipped pets via PetCmds.GetEquipped"
+    self:_report()
     local ok, equipped = pcall(self._petCmds.GetEquipped)
     if not current() then error("Pet read canceled by timeout, reconnect or unload.", 0) end
     if not ok then error("PetCmds.GetEquipped failed: " .. tostring(equipped), 0) end
@@ -237,6 +243,52 @@ function PetSim99:_readSnapshot(probe, active)
     return { Candidates = candidates, Pets = pets, HealthKnown = #candidates > 0 and allHealthKnown }
 end
 
+-- Non-invasive preflight. Reads only local objects; no require, Invoke or Fire.
+-- A green local check is not proof that the game accepts the coin protocol.
+function PetSim99:Inspect()
+    local storage = game:GetService("ReplicatedStorage")
+    local library = storage:FindFirstChild("Library")
+    local client = library and library:FindFirstChild("Client")
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local issues = {}
+    if game.PlaceId ~= Config.Target.PlaceId or game.GameId ~= Config.Target.UniverseId then
+        table.insert(issues, "Wrong destination: join the PS99 Classic Event place.")
+    end
+    if not library or not (library:IsA("ModuleScript") or library:IsA("Folder")) then
+        table.insert(issues, "ReplicatedStorage.Library is not loaded.")
+    elseif library:IsA("Folder") and not client then
+        table.insert(issues, "Legacy Library.Client folder is missing.")
+    end
+    if not coins or not coins:IsA("Folder") then
+        table.insert(issues, "No loaded __THINGS.Coins folder.")
+    elseif #coins:GetChildren() == 0 then
+        table.insert(issues, "No coin models are loaded nearby.")
+    end
+    if not root or not root:IsA("BasePart") then
+        table.insert(issues, "Character HumanoidRootPart is unavailable.")
+    end
+    self._diagnostics = table.concat({
+        "LOCAL PREFLIGHT (no game modules or network touched)",
+        "PlaceId: " .. tostring(game.PlaceId) .. " (expected " .. tostring(Config.Target.PlaceId) .. ")",
+        "UniverseId: " .. tostring(game.GameId) .. " (expected " .. tostring(Config.Target.UniverseId) .. ")",
+        "Library: " .. (if library then library.ClassName else "missing"),
+        "Library.Client: " .. childSummary(client, 50),
+        "__THINGS: " .. childSummary(things, 40),
+        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Character root: " .. (if root then "present" else "missing"),
+        "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
+    }, "\n")
+    self._phase = "Local preflight finished; no remote request sent"
+    self:_report()
+    return #issues == 0, if #issues == 0
+        then "Local objects present. Run the separate compatibility check to test game protocol."
+        else table.concat(issues, "; ")
+end
+
 function PetSim99:Connect(active)
     if active and not active() then return self end
     self._generation += 1
@@ -251,6 +303,9 @@ function PetSim99:Connect(active)
     self._coinResponse, self._networkExports, self._petExports = nil, nil, nil
     self._moduleLoader, self._loaderName, self._networkProvider = nil, nil, nil
     self._cooldowns = setmetatable({}, { __mode = "k" })
+    self._phase = "Inspecting local game environment"
+    self._diagnostics = nil
+    self:_report()
     local matches = game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId
     local storage = game:GetService("ReplicatedStorage")
     local library = storage:FindFirstChild("Library")
@@ -270,12 +325,16 @@ function PetSim99:Connect(active)
         "__THINGS: " .. childSummary(things, 60),
         "__DEBRIS: " .. childSummary(workspace:FindFirstChild("__DEBRIS"), 40),
     }, "\n")
+    self._phase = "Validating event PlaceId and replicated objects"
+    self:_report()
     local ok, message = pcall(function()
         if not matches then
             error("Enter Classic Event place " .. tostring(Config.Target.PlaceId) .. " in universe "
                 .. tostring(Config.Target.UniverseId) .. " and reconnect. Current destination differs.", 0)
         end
         if not library then error("ReplicatedStorage.Library is not loaded. Wait inside the event and reconnect.", 0) end
+        self._phase = "Choosing native module loader"
+        self:_report()
         local loader, loaderName = selectLoader()
         if not current() then return end
         self._moduleLoader, self._loaderName = loader, loaderName
@@ -284,6 +343,8 @@ function PetSim99:Connect(active)
             -- Use the documented public library rather than bypassing its facade.
             self._networkProvider = "ReplicatedStorage.Library"
             networkPath = "ReplicatedStorage.Library.Network"
+            self._phase = "Loading ReplicatedStorage.Library ModuleScript"
+            self:_report()
             local facade = requireModule(library, "ReplicatedStorage.Library", loader)
             if not current() then return end
             network = facade.Network
@@ -306,6 +367,8 @@ function PetSim99:Connect(active)
                 networkPath = "Library.Network"
             end
             self._networkProvider = networkPath
+            self._phase = "Loading legacy network ModuleScript"
+            self:_report()
             network = requireModule(networkModule, networkPath, loader)
             if not current() then return end
             petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
@@ -317,6 +380,8 @@ function PetSim99:Connect(active)
                 if loaded then world = value end
             end
         end
+        self._phase = "Inspecting network and pet command exports"
+        self:_report()
         local networkExports = exportSummary(network, { "Invoke", "Fire" }, current)
         if not current() then return end
         local petExports = exportSummary(petCmds, { "GetEquipped" }, current)
@@ -344,8 +409,11 @@ function PetSim99:Connect(active)
             error("__THINGS.Coins is not an available Folder. Enter a loaded coin area and reconnect.", 0)
         end
         if type(hasArea) == "function" then self._world = world end
+        self._phase = "Starting Get Coins protocol probe"
+        self:_report()
         local snapshot = self:_readSnapshot(true, active)
         if not current() then return end
+        self._phase = "Probe succeeded; features can be enabled manually"
         self._connected = true
         self.Supported.AutoFarm, self.Supported.WalkToTarget = true, true
         local orbs = things:FindFirstChild("Orbs")

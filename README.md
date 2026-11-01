@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.6.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.6.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -56,6 +56,15 @@ a true acknowledgement stops that feature. Request counters are not reward count
 
 ## Farm and other utilities
 
+Farm → **Inspect local environment (no network)** checks the event destination, Library,
+loaded coins and character root without requiring a module or sending remote
+requests. It reports missing objects immediately; a pass does **not** prove
+compatibility. **Run compatibility check** performs the separate native Get Coins
+probe only if local preflight passes. The Status page now shows live probe/pet
+stages and running or cancellation-pending workers. Request-timeout errors
+distinguish successful cancellation from a worker that is still pending.
+A rejected or hung native call is not retried automatically.
+
 Farm → **Run compatibility check** makes one native Get Coins attempt. Only a
 strictly valid reply matching loaded coin Models enables the experimental farm
 and pickup controls. Start with Nearest priority. Empty/rejected replies stay
@@ -71,6 +80,10 @@ All pet mutations share one job slot; a pending uncancellable request cannot
 be overlapped. Slow conversions cannot starve hatch/gold/rainbow stages. Disable,
 timeout, respawn and Stop All cancel follow-up work. Native menus are local visual
 shortcuts; closing/reopening does not bypass any game check.
+
+Pet tools now report failed API loading in Last Error rather than silently
+clearing the error whenever a loader returns normally. No network API failures
+are disguised as successful game actions.
 
 The script uses the original game loader `getrenv().require` when exposed,
 otherwise ordinary require, through `ReplicatedStorage.Library`. Failed public

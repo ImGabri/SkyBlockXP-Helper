@@ -18,6 +18,21 @@ function Jobs:blocked(name)
     return slot ~= nil and slot.cancelled == true
 end
 
+function Jobs:summary()
+    local names = {}
+    for name in pairs(self.slots) do table.insert(names, name) end
+    table.sort(names)
+    if #names == 0 then return "No active jobs." end
+    local lines, now = {}, self.driver.clock()
+    for _, name in ipairs(names) do
+        local slot = self.slots[name]
+        local state = if slot.cancelled then "cancellation pending" else "running"
+        table.insert(lines, string.format("%s: %s (%.1fs / %.1fs)",
+            name, state, math.max(0, now - slot.started), slot.timeout))
+    end
+    return table.concat(lines, "\n")
+end
+
 function Jobs:start(name, timeout, work, complete)
     if self.slots[name] then return false end
     local slot = { started = self.driver.clock(), timeout = timeout, complete = complete, cancelled = false }
@@ -66,7 +81,10 @@ function Jobs:tick()
         local name, slot = entry.name, entry.slot
         if self.slots[name] == slot and not slot.cancelled then
             self:cancel(name)
-            slot.complete(false, "Request timed out. No overlapping retry is allowed while that worker is still running.")
+            local pending = self.slots[name] == slot
+            slot.complete(false, if pending
+                then "Request timed out. Native cancellation did not finish; retry blocked until worker exits."
+                else "Request timed out; worker cancelled. No automatic retry was sent.")
         end
     end
 end

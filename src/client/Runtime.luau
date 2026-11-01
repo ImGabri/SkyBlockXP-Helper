@@ -122,8 +122,10 @@ function Runtime:PrepareCare()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:Connect(activeJob)
     end, function(ok, result)
-        self.State.CareStatus = if ok then self.Care.Reason else "Pet tools failed to load"
-        self.State.LastError = if ok then "" else tostring(result)
+        local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
+        self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
+        self.State.LastError = if loaded then "" else (if ok then tostring(self.Care.Reason) else tostring(result))
+            .. " [Pet stage: " .. tostring(self.Care._phase or "unknown") .. "]"
         self:Publish()
     end)
     if not started then return false, "A previous pet operation is still returning; no new request sent." end
@@ -182,7 +184,14 @@ end
 
 function Runtime:Step()
     self:StepCare()
-    if not self.Ready then return end
+    if not self.Ready then
+        local now = os.clock()
+        if now >= (self.NextPublish or 0) and (self.Jobs:busy("connect") or self.Jobs:busy("care")) then
+            self.NextPublish = now + 1
+            self:Publish()
+        end
+        return
+    end
     local now = os.clock()
     local character = self.Player.Character
     local root = character and character:FindFirstChild("HumanoidRootPart")
@@ -270,6 +279,9 @@ end
 function Runtime:Publish()
     if not self.Alive then return end
     self.State.Options = table.clone(self.Options)
+    self.State.WorkerStatus = self.Jobs:summary()
+    self.State.ProbeStage = self.Adapter._phase or "not started"
+    self.State.CareStage = self.Care._phase or "not started"
     self.State.Supported = table.clone(self.Adapter.Supported)
     for key, supported in pairs(self.Care.Supported) do self.State.Supported[key] = supported end
     for field, count in pairs(self.Care.Counts) do self.State[field] = count end
@@ -402,10 +414,35 @@ function Runtime:StopAll()
     self:Publish()
 end
 
+function Runtime:InspectEnvironment()
+    if not self.Alive then return false, "Suite unloaded." end
+    if self.Jobs:busy("connect") then
+        return false, "A compatibility check is still active. No parallel preflight was started."
+    end
+    local ok, ready, message = pcall(function() return self.Adapter:Inspect() end)
+    if not ok then
+        message = tostring(ready)
+        ready = false
+    end
+    self.State.Status = if ready then "Local preflight passed — protocol not tested" else "Local preflight needs attention"
+    self.State.LastError = if ready then "" else tostring(message)
+    self:Publish()
+    return ready, message
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
     self.Adapter.Supported = { AutoFarm = false, AutoCollectOrbs = false, AutoCollectLootbags = false, WalkToTarget = false }
+    if type(self.Adapter.Inspect) == "function" then
+        local ok, ready, message = pcall(function() return self.Adapter:Inspect() end)
+        if not ok or not ready then
+            self.State.Status = "Local preflight failed; no network request sent"
+            self.State.LastError = if ok then tostring(message) else tostring(ready)
+            self:Publish()
+            return false, self.State.LastError
+        end
+    end
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
@@ -413,7 +450,7 @@ function Runtime:Reconnect()
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
-        self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) else self.Adapter.Reason
+        self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) .. " [Probe stage: " .. tostring(self.Adapter._phase or "unknown") .. "]" else self.Adapter.Reason
         self:Publish()
     end)
     if not started then
@@ -428,6 +465,10 @@ function Runtime:Diagnostics()
     return table.concat({
         Config.Name .. " v" .. Config.Version,
         "Startup makes no game-module or network probe. The compatibility check is manual.",
+        "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
+        "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
+        "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),
@@ -439,6 +480,7 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "InspectEnvironment" then return self:InspectEnvironment()
     elseif action == "PrepareCare" then return self:PrepareCare()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
