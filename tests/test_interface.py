@@ -154,6 +154,7 @@ local expected = {
     ["Next egg"]="NextEgg", ["Next conversion species"]="NextSpecies",
     ["Clear status error"]="ClearError",
     ["Go to gold machine"]="GoGoldMachine", ["Go to rainbow machine"]="GoRainbowMachine",
+    ["Go to selected egg"]="GoSelectedEgg",
 }
 local buttons = {}
 for caption, actionName in pairs(expected) do
@@ -202,6 +203,9 @@ assert(changes[#changes][1] == "EggName" and changes[#changes][2] == "Spotted Eg
 local mode = control("Hatch mode", "TextButton")
 mode.Activated:Fire()
 assert(changes[#changes][1] == "HatchMode" and changes[#changes][2] == "Triple")
+local eggTravel = control("Egg travel", "TextButton")
+eggTravel.Activated:Fire()
+assert(changes[#changes][1] == "EggTravelMode" and changes[#changes][2] == "Off")
 local travel = control("Machine travel", "TextButton")
 travel.Activated:Fire()
 assert(changes[#changes][1] == "MachineTravelMode" and changes[#changes][2] == "Off")
