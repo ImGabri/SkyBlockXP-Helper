@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.4",
+    Version = "0.7.5",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -1048,6 +1048,7 @@ function PetCare:_report()
         .. "\nPet-tool provider: " .. (if self._mode == "Direct" then "Library.Client + Library.Directory child modules" else "ReplicatedStorage.Library facade")
         .. " (public game modules). Legacy commands; current game acceptance unverified."
         .. "\nSave shape: " .. (self._saveReport or "not inspected; no inventory values recorded")
+        .. "\nSave.Get call: " .. (self._saveCallReport or "not inspected")
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
@@ -1066,6 +1067,7 @@ function PetCare:Connect(active, mode)
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
+    self._saveReport, self._saveCallReport = nil, nil
     self._phase = "Checking game and public Library"
     self:_report()
     local ok, message = pcall(function()
@@ -1173,16 +1175,32 @@ function PetCare:InspectSave(active)
     self._busy = owner
     self._phase = "Inspecting Save.Get layout (read-only)"
     self:_report()
-    local ok, value = pcall(self._api.getSave)
+    local call = table.pack(pcall(self._api.getSave))
     if self._busy == owner then self._busy = nil end
     if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
-    if not ok then
+    local returns = math.max(0, call.n - 1)
+    self._saveCallReport = "returns=" .. tostring(returns)
+        .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
+    if debug and type(debug.info) == "function" then
+        local metaOk, args, variadic = pcall(debug.info, self._api.getSave, "a")
+        if metaOk then
+            self._saveCallReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic)
+        end
+    end
+    if not call[1] then
         self._saveReport = "Save.Get raised an error; no inventory values recorded"
         self:_report()
-        error("Save.Get failed during read-only inspection: " .. tostring(value), 0)
+        error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
     end
+    local value = call[2]
     self._saveReport = describeSaveShape(value)
     self._phase = "Save.Get layout inspected (read-only)"
+    if type(value) ~= "table" or type(value.Pets) ~= "table" then
+        -- Module existence does not establish readiness for a pet mutation.
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(value) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
+    end
     self:_report()
     return true
 end
@@ -1322,6 +1340,10 @@ function PetCare:_conversionBatch(variant, selected, current)
     self._saveReport = describeSaveShape(save)
     self:_report()
     if type(save) ~= "table" or type(save.Pets) ~= "table" then
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(save) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get inventory unavailable; conversion disabled until a fresh pet-tool load."
+        self:_report()
         error("Save.Get did not provide a Pets table (" .. self._saveReport
             .. "). No pets submitted. Use Inspect save layout for read-only diagnostics.", 0)
     end
@@ -1446,16 +1468,21 @@ end
 
 local function childSummary(parent, limit)
     if not parent then return "not present" end
-    local names = {}
+    local counts, labels, total = {}, {}, 0
     for _, child in ipairs(parent:GetChildren()) do
-        table.insert(names, child.Name .. " (" .. child.ClassName .. ")")
+        local name = child.Name .. " (" .. child.ClassName .. ")"
+        if counts[name] == nil then table.insert(labels, name); counts[name] = 0 end
+        counts[name] += 1
+        total += 1
     end
-    table.sort(names)
-    local total = #names
-    while #names > limit do table.remove(names) end
-    local result = table.concat(names, ", ")
-    if total > limit then result ..= string.format(" ... (%d more)", total - limit) end
-    return if result == "" then "empty" else result
+    table.sort(labels)
+    local summary = {}
+    for index, name in ipairs(labels) do
+        if index > limit then break end
+        table.insert(summary, name .. (if counts[name] > 1 then " x" .. counts[name] else ""))
+    end
+    if #labels > limit then table.insert(summary, string.format("... (%d other distinct labels)", #labels - limit)) end
+    return if total == 0 then "empty" else string.format("%d children: %s", total, table.concat(summary, ", "))
 end
 
 local function selectLoader()
@@ -1694,10 +1721,16 @@ function PetSim99:Inspect()
     elseif library:IsA("Folder") and not client then
         table.insert(issues, "Legacy Library.Client folder is missing.")
     end
+    local modelCount = 0
     if not coins or not coins:IsA("Folder") then
         table.insert(issues, "No loaded __THINGS.Coins folder.")
-    elseif #coins:GetChildren() == 0 then
-        table.insert(issues, "No coin models are loaded nearby.")
+    else
+        for _, item in ipairs(coins:GetChildren()) do
+            if item:IsA("Model") then modelCount += 1 end
+        end
+        if modelCount == 0 then
+            table.insert(issues, "No loaded coin models; move normally into an event breakable area before any compatibility request.")
+        end
     end
     if not root or not root:IsA("BasePart") then
         table.insert(issues, "Character HumanoidRootPart is unavailable.")
@@ -1709,7 +1742,7 @@ function PetSim99:Inspect()
         "Library: " .. (if library then library.ClassName else "missing"),
         "Library.Client: " .. childSummary(client, 50),
         "__THINGS: " .. childSummary(things, 40),
-        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Coin models: " .. (if coins then tostring(modelCount) else "missing"),
         "Character root: " .. (if root then "present" else "missing"),
         "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
     }, "\n")

@@ -398,6 +398,17 @@ local snapshot = adapter:Snapshot()
 assert(adapter.Supported.AutoFarm and #snapshot.Candidates == 1, "stale facade replaced current area filtering")
 ''')
 
+    def test_local_preflight_blocks_missing_coin_models_without_networking(self):
+        self.run_case('''
+coins.Children = {}
+local adapter = PetSim99.new()
+local ready, message = adapter:Inspect()
+assert(not ready)
+contains(message, "No loaded coin models")
+assert(nativeCalls == 0 and #calls == 0, "empty coin area attempted a module or network call")
+assert(not adapter.Supported.AutoFarm)
+''')
+
     def test_local_coin_inspector_reads_models_without_modules_or_network(self):
         self.run_case('''
 local adapter = PetSim99.new()

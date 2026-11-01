@@ -130,6 +130,26 @@ assert(#calls == 0, "invalid save shape triggered a mutation")
 assert(#care._reserved == 0 or next(care._reserved) == nil)
 ''')
 
+    def test_nil_save_inspection_disables_mutations_without_sending_requests(self):
+        self.run_case('''
+facade.Save.Get = function() return nil end
+care:Connect()
+assert(care:InspectSave())
+assert(not care.Supported.AutoGold and not care.Supported.AutoRainbow and not care.Supported.AutoHatch)
+contains(care.Report, "Save.Get call: returns=1; first type=nil")
+assert(#calls == 0, "nil save must not send any mutating request")
+''')
+
+    def test_read_only_save_inspector_distinguishes_zero_return_values(self):
+        self.run_case('''
+facade.Save.Get = function() return end
+care:Connect()
+assert(care:InspectSave())
+contains(care.Report, "Save.Get call: returns=0; first type=none")
+assert(not care.Supported.AutoGold)
+assert(#calls == 0)
+''')
+
     def test_read_only_save_inspector_handles_nil_data_without_remote_calls(self):
         self.run_case('''
 facade.Save.Get = function() return nil end

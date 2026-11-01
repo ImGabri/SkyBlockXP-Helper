@@ -23,16 +23,21 @@ end
 
 local function childSummary(parent, limit)
     if not parent then return "not present" end
-    local names = {}
+    local counts, labels, total = {}, {}, 0
     for _, child in ipairs(parent:GetChildren()) do
-        table.insert(names, child.Name .. " (" .. child.ClassName .. ")")
+        local name = child.Name .. " (" .. child.ClassName .. ")"
+        if counts[name] == nil then table.insert(labels, name); counts[name] = 0 end
+        counts[name] += 1
+        total += 1
     end
-    table.sort(names)
-    local total = #names
-    while #names > limit do table.remove(names) end
-    local result = table.concat(names, ", ")
-    if total > limit then result ..= string.format(" ... (%d more)", total - limit) end
-    return if result == "" then "empty" else result
+    table.sort(labels)
+    local summary = {}
+    for index, name in ipairs(labels) do
+        if index > limit then break end
+        table.insert(summary, name .. (if counts[name] > 1 then " x" .. counts[name] else ""))
+    end
+    if #labels > limit then table.insert(summary, string.format("... (%d other distinct labels)", #labels - limit)) end
+    return if total == 0 then "empty" else string.format("%d children: %s", total, table.concat(summary, ", "))
 end
 
 local function selectLoader()
@@ -271,10 +276,16 @@ function PetSim99:Inspect()
     elseif library:IsA("Folder") and not client then
         table.insert(issues, "Legacy Library.Client folder is missing.")
     end
+    local modelCount = 0
     if not coins or not coins:IsA("Folder") then
         table.insert(issues, "No loaded __THINGS.Coins folder.")
-    elseif #coins:GetChildren() == 0 then
-        table.insert(issues, "No coin models are loaded nearby.")
+    else
+        for _, item in ipairs(coins:GetChildren()) do
+            if item:IsA("Model") then modelCount += 1 end
+        end
+        if modelCount == 0 then
+            table.insert(issues, "No loaded coin models; move normally into an event breakable area before any compatibility request.")
+        end
     end
     if not root or not root:IsA("BasePart") then
         table.insert(issues, "Character HumanoidRootPart is unavailable.")
@@ -286,7 +297,7 @@ function PetSim99:Inspect()
         "Library: " .. (if library then library.ClassName else "missing"),
         "Library.Client: " .. childSummary(client, 50),
         "__THINGS: " .. childSummary(things, 40),
-        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Coin models: " .. (if coins then tostring(modelCount) else "missing"),
         "Character root: " .. (if root then "present" else "missing"),
         "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
     }, "\n")

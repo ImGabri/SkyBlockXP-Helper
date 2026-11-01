@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.4**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.5**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.4. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.5. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -71,6 +71,24 @@ nested `Pets` fields when present. It does **not** print inventory, UIDs,
 balances or pet records; it does not send any game mutation request. This
 diagnostic does not assume that nested data is safe for conversion. Conversion
 will remain unavailable until the actual save contract can be validated.
+
+## v0.7.5: exact nil-save result and preflight gating
+
+The confirmed v0.7.4 live result showed `Save.Get` returning nil, rather
+than an inventory table or an unexpected table shape. The **Inspect save layout**
+button now reports the number and types of return values and callable argument
+metadata (without dumping inventory details). A nil or invalid save automatically
+disables pet conversion buttons for the session; a missing save table also
+disables hatching because the currency balance cannot be verified. Reload pet
+tools in a fresh session after the game save becomes available. This is a
+defensive readiness check, not a server workaround.
+
+**Run compatibility check** now refuses to invoke the already-failing
+`Get Coins` command when no coin Models are present in the local `__THINGS.Coins`
+folder. It does not interpret non-model children as coins. Debug listings
+combine repeated names (e.g., identical RemoteEvent entries) to make reports
+shorter. The previously seen `Get Coins` zero-value response remains
+unsupported and will not be guessed or replaced with unverified data.
 
 ## Eggs, gold and rainbow
 
