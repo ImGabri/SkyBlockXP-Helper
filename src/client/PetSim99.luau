@@ -64,7 +64,7 @@ local function responseSummary(result)
     return "returns=" .. tostring(result.n) .. "; types=" .. (if #types > 0 then table.concat(types, ",") else "none")
 end
 
-local function exportSummary(exports, expected)
+local function exportSummary(exports, expected, active)
     local names = {}
     local keys = {}
     for name, value in pairs(exports) do
@@ -72,7 +72,9 @@ local function exportSummary(exports, expected)
     end
     for _, name in ipairs(expected or {}) do keys[name] = true end
     for name in pairs(keys) do
+        if active and not active() then return nil end
         local readable, value = pcall(function() return exports[name] end)
+        if active and not active() then return nil end
         local shape = if readable then typeof(value) else "unavailable"
         if readable and type(value) == "function" and debug and type(debug.info) == "function" then
             local ok, count, variadic = pcall(debug.info, value, "a")
@@ -284,8 +286,12 @@ function PetSim99:Connect(active)
             networkPath = "ReplicatedStorage.Library.Network"
             local facade = requireModule(library, "ReplicatedStorage.Library", loader)
             if not current() then return end
-            network, petCmds = facade.Network, facade.PetCmds
+            network = facade.Network
+            if not current() then return end
+            petCmds = facade.PetCmds
+            if not current() then return end
             local ok, value = pcall(function() return facade.WorldCmds end)
+            if not current() then return end
             if ok then world = value end
             if type(network) ~= "table" or type(petCmds) ~= "table" then
                 error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
@@ -311,21 +317,33 @@ function PetSim99:Connect(active)
                 if loaded then world = value end
             end
         end
-        self._network, self._petCmds = network, petCmds
-        self._networkExports = exportSummary(network, { "Invoke", "Fire" })
-        self._petExports = exportSummary(petCmds, { "GetEquipped" })
-        if type(self._network.Invoke) ~= "function" or type(self._network.Fire) ~= "function" then
+        local networkExports = exportSummary(network, { "Invoke", "Fire" }, current)
+        if not current() then return end
+        local petExports = exportSummary(petCmds, { "GetEquipped" }, current)
+        if not current() then return end
+        local invoke = network.Invoke
+        if not current() then return end
+        local fire = network.Fire
+        if not current() then return end
+        if type(invoke) ~= "function" or type(fire) ~= "function" then
             error(networkPath .. " lacks Invoke/Fire functions; this protocol is unsupported.", 0)
         end
-        if type(self._petCmds.GetEquipped) ~= "function" then
-            error("Library.Client.PetCmds lacks GetEquipped; this protocol is unsupported.", 0)
+        local getEquipped = petCmds.GetEquipped
+        if not current() then return end
+        if type(getEquipped) ~= "function" then
+            error("PetCmds lacks GetEquipped; this protocol is unsupported.", 0)
         end
+        local hasArea
+        if type(world) == "table" then hasArea = world.HasArea end
+        if not current() then return end
+        self._network, self._petCmds = network, petCmds
+        self._networkExports, self._petExports = networkExports, petExports
         self._things = things
         self._coins = things and things:FindFirstChild("Coins")
         if not self._coins or not self._coins:IsA("Folder") then
             error("__THINGS.Coins is not an available Folder. Enter a loaded coin area and reconnect.", 0)
         end
-        if type(world) == "table" and type(world.HasArea) == "function" then self._world = world end
+        if type(hasArea) == "function" then self._world = world end
         local snapshot = self:_readSnapshot(true, active)
         if not current() then return end
         self._connected = true
