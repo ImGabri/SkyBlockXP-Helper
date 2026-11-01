@@ -189,7 +189,7 @@ function PetCare:NextChoice(kind, previous)
             eligible = definition.hatchable == true and not definition.disabled and not definition.isPremium
                 and text(definition.currency) and definition.currency:lower() ~= "robux" and number(definition.cost) and definition.cost > 0
         else
-            eligible = text(definition.rarity) and not definition.isPremium and not definition.huge and not definition.titanic
+            eligible = text(definition.rarity) and not definition.isPremium and not definition.isGift and not definition.huge and not definition.titanic
                 and definition.rarity ~= "Exclusive" and definition.rarity ~= "Event"
         end
         if eligible and (text(id) or number(id)) then
@@ -222,7 +222,7 @@ function PetCare:Convert(variant, selected, active)
         local id, definition = speciesId(self._api.pets, selected)
         if not current() then return 0 end
         if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
-        local premium = definition.isPremium or definition.huge or definition.titanic
+        local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
             or definition.rarity == "Exclusive" or definition.rarity == "Event"
         local save = self._api.getSave()
         if not current() then return 0 end
@@ -244,10 +244,10 @@ function PetCare:Convert(variant, selected, active)
             end
             present[pet.uid] = true
             local protected = premium or self._reserved[pet.uid] or false
-            for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "lk", "locked", "favorite", "fav" }) do
+            for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "l", "lk", "locked", "favorite", "fav" }) do
                 if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
             end
-            protected = protected or pet.dm or pet.hc or pet.sh or pet.lk or pet.locked or pet.favorite or pet.fav
+            protected = protected or pet.dm or pet.hc or pet.sh or pet.l or pet.lk or pet.locked or pet.favorite or pet.fav
                 or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
             local unlocked = unlockedSlot(gui, pet.uid)
             table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),

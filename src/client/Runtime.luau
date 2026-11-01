@@ -5,6 +5,7 @@ local Jobs = require(script.Parent.Jobs)
 local Interface = require(script.Parent.Interface)
 local PetSim99 = require(script.Parent.PetSim99)
 local PetCare = require(script.Parent.PetCare)
+local MachineNavigation = require(script.Parent.MachineNavigation)
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -20,6 +21,11 @@ function Runtime.new(player, parent)
             Farmed = 0, CollectedOrbs = 0, CollectedLootbags = 0, LastError = "",
             CareStatus = "Pet tools idle — click Load pet tools", HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
     }, Runtime)
+    self.Navigator = MachineNavigation.new(player, function(message)
+        if not self.Alive then return end
+        self.State.CareStatus = message
+        self:Publish()
+    end)
     self.Ui = Interface.mount({
         parent = parent, name = Config.Name, version = Config.Version, options = self.Options,
         onChange = function(key, value) return self:SetOption(key, value) end,
@@ -28,6 +34,7 @@ function Runtime.new(player, parent)
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
         self.Jobs:cancel("care")
+        self.Navigator:Stop()
         self:StopNavigation()
         self.LastAssignment = nil
         self.NextAt = {}
@@ -139,16 +146,26 @@ function Runtime:StartCare(key, manual)
     local character = self.Player.Character
     if not character or not character.Parent then return false, "Wait for your character to load." end
     local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
-    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+    local travel = self.Options.MachineTravelMode == "Walk" and key ~= "AutoHatch"
+    local timeout = Config.RequestTimeout + (if travel then Config.TravelTimeout else 0)
+    local started = self.Jobs:start("care", timeout, function(activeJob)
         local function current()
             return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
                 and (manual or self.Options[key])
         end
         if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
-        return self.Care:Convert(if key == "AutoGold" then "Gold" else "Rainbow", species, current)
+        local variant = if key == "AutoGold" then "Gold" else "Rainbow"
+        if travel then
+            self.Jobs:cancel("AutoFarm")
+            self:StopNavigation()
+            if not self.Navigator:Approach(variant, current) then return 0 end
+        end
+        if not current() then return 0 end
+        return self.Care:Convert(variant, species, current)
     end, function(ok, result)
         self.State.CareStatus = self.Care.Reason
         if not ok then
+            self.Navigator:Stop()
             self.Options[key] = false
             self.State.LastError = key .. ": " .. tostring(result)
             self.State.CareStatus = "Pet operation stopped — see error"
@@ -156,6 +173,33 @@ function Runtime:StartCare(key, manual)
         self:Publish()
     end)
     if not started then return false, "A pet operation is still returning; no overlapping request sent." end
+    return true
+end
+
+function Runtime:GoToMachine(variant, openMenu)
+    if not self.Alive then return false, "Suite unloaded." end
+    local character = self.Player.Character
+    if not character or not character.Parent then return false, "Wait for your character to load." end
+    self.Jobs:cancel("AutoFarm")
+    self:StopNavigation()
+    local started = self.Jobs:start("care", Config.TravelTimeout, function(activeJob)
+        local function current()
+            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+        end
+        if not self.Navigator:Approach(variant, current) or not current() then return false end
+        if openMenu then self.Care:OpenMenu(variant) end
+        return true
+    end, function(ok, result)
+        if not ok then
+            self.Navigator:Stop()
+            self.State.LastError = "Machine travel: " .. tostring(result)
+            self.State.CareStatus = "Machine travel stopped — see error"
+        elseif result then
+            self.State.CareStatus = "Arrived at " .. variant .. " machine"
+        end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping journey started." end
     return true
 end
 
@@ -184,6 +228,12 @@ end
 
 function Runtime:Step()
     self:StepCare()
+    if self.Jobs:busy("care") and self.Options.MachineTravelMode == "Walk" then
+        self.Jobs:cancel("AutoFarm")
+        self:StopNavigation()
+        self:Publish()
+        return
+    end
     if not self.Ready then
         local now = os.clock()
         if now >= (self.NextPublish or 0) and (self.Jobs:busy("connect") or self.Jobs:busy("care")) then
@@ -246,7 +296,7 @@ function Runtime:Step()
             if count > 0 then
                 self.LastAssignment = { Id = target.id, Pets = signature, Time = os.clock() }
             end
-            return { Status = if count > 0 then "Farm requests sent; waiting for game response." else "No additional pet dispatches needed.", Target = title,
+            return { Status = if count > 0 then "Farm requests sent; waiting for game response." else self.Adapter.Reason, Target = title,
                 Farmed = self.State.Farmed + count }
         end, function(ok, result) self:FeatureResult("AutoFarm", ok, result) end)
     end
@@ -356,15 +406,19 @@ function Runtime:SetOption(key, value)
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
-            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then self.Jobs:cancel("care") end
+            if key == "AutoHatch" or key == "AutoGold" or key == "AutoRainbow" then
+                self.Jobs:cancel("care")
+                self.Navigator:Stop()
+            end
             if key == "AutoFarm" or key == "WalkToTarget" then self:StopNavigation() end
         else
             self.Failures[key] = 0
             self.NextAt[key] = 0
         end
     end
-    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" then
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" then
         self.Jobs:cancel("care")
+        self.Navigator:Stop()
     end
     if key == "AutoFarm" or key == "FarmMode" or key == "Area" or key == "NameFilter" or key == "Radius" then
         self.Jobs:cancel("AutoFarm")
@@ -401,6 +455,7 @@ end
 
 function Runtime:StopAll()
     self.Jobs:cancelAll()
+    self.Navigator:Stop()
     self:StopNavigation()
     self.LastAssignment = nil
     self.NextAt = {}
@@ -493,8 +548,14 @@ function Runtime:Action(action)
     elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
     elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
     elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")
-    elseif action == "OpenGoldMenu" then return self.Care:OpenMenu("Gold")
-    elseif action == "OpenRainbowMenu" then return self.Care:OpenMenu("Rainbow")
+    elseif action == "GoGoldMachine" then return self:GoToMachine("Gold", false)
+    elseif action == "GoRainbowMachine" then return self:GoToMachine("Rainbow", false)
+    elseif action == "OpenGoldMenu" then
+        if self.Options.MachineTravelMode == "Walk" then return self:GoToMachine("Gold", true) end
+        return self.Care:OpenMenu("Gold")
+    elseif action == "OpenRainbowMenu" then
+        if self.Options.MachineTravelMode == "Walk" then return self:GoToMachine("Rainbow", true) end
+        return self.Care:OpenMenu("Rainbow")
     elseif action == "OpenInventory" then return self.Care:OpenMenu("Inventory")
     elseif action == "ClearError" then self.State.LastError = ""; self:Publish()
     elseif action == "ResetMovement" then return self:SetOption("MovementEnabled", false)
