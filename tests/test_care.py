@@ -39,6 +39,15 @@ for _, name in ipairs({ "Golden", "Rainbow", "Inventory", "Eggs" }) do
     local gui = instance(name, "ScreenGui", playerGui)
     gui.Enabled = false
 end
+local frame = instance("Frame", "Frame", playerGui:FindFirstChild("Inventory"))
+local main = instance("Main", "Frame", frame)
+local slots = instance("Pets", "Frame", main)
+local normalSlots = instance("Normal", "Frame", slots)
+for _, pet in ipairs(inventory) do
+    local slot = instance(pet.uid, "TextButton", normalSlots)
+    local locked = instance("Locked", "ImageLabel", slot)
+    locked.Visible = false
+end
 '''
 
 
@@ -143,6 +152,15 @@ local seen = {}
 for _, call in ipairs(calls) do
     for _, uid in ipairs(call.args[1]) do assert(not seen[uid], "same UID submitted twice"); seen[uid] = true end
 end
+''')
+
+    def test_missing_or_locked_inventory_slots_cannot_be_converted(self):
+        for change in ['normalSlots.Children = {}', 'for _, slot in ipairs(normalSlots:GetChildren()) do slot:FindFirstChild("Locked").Visible = true end']:
+            with self.subTest(change=change):
+                self.run_case(change + '''
+care:Connect()
+assert(care:Convert("Gold", "cat") == 0)
+assert(#calls == 0, "missing/locked UI slots allowed consuming pets")
 ''')
 
     def test_empty_or_rejected_responses_stop_feature_without_claiming_success(self):
