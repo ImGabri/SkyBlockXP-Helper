@@ -106,13 +106,23 @@ end
 
 function PetCare:_request(key, command, counter, current, ...)
     if not current() then return 0 end
+    self._lastFailure = nil
     self.Counts[counter] += 1
     local response = table.pack(pcall(self._api.invoke, command, ...))
     if not current() then return 0 end
     if not response[1] or response.n < 2 or response[2] ~= true then
-        self.Supported[key] = false
-        self.Reason = command .. " was rejected or gave no true acknowledgement; feature stopped."
-        if not response[1] then self.Reason ..= " " .. tostring(response[2]) end
+        local message
+        if not response[1] then message = tostring(response[2])
+        elseif response[2] == false and type(response[3]) == "string" then message = response[3] end
+        if message then message = message:sub(1, 500):gsub("[%c]", " ") end
+        local distance = response[1] and response[2] == false and message
+            and message:lower():find("too far", 1, true) ~= nil
+        self._lastFailure = if distance then "Distance" else "Unknown"
+        -- A definite range rejection is recoverable after approaching normally.
+        self.Supported[key] = distance == true
+        self.Reason = command .. ": " .. (message or "No true acknowledgement returned.")
+            .. (if distance then " Move closer to the target in game, then retry. No automatic retry was sent."
+                else " Feature stopped; inspect the error before loading again.")
         self:_report()
         error(self.Reason, 0)
     end
@@ -246,8 +256,16 @@ function PetCare:Convert(variant, selected, active)
         if not current() then return 0 end
         -- Reserve before the request: an uncertain/late reply must never replay UIDs.
         for _, uid in ipairs(batch) do self._reserved[uid] = true end
-        return self:_request(key, if variant == "Gold" then "Use Golden Machine" else "Use Rainbow Machine",
+        local ok, result = pcall(self._request, self, key,
+            if variant == "Gold" then "Use Golden Machine" else "Use Rainbow Machine",
             if variant == "Gold" then "GoldRequests" else "RainbowRequests", current, batch)
+        if not ok then
+            if current() and self._lastFailure == "Distance" then
+                for _, uid in ipairs(batch) do self._reserved[uid] = nil end
+            end
+            error(result, 0)
+        end
+        return result
     end)
 end
 
