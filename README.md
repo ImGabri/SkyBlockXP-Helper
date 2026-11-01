@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.1**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.7.2**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,9 +19,24 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.1. Startup is passive and all automation starts off.
+Confirm the title shows v0.7.2. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
+
+## When the public Library facade hangs
+
+If the diagnostic report stops at `Loading ReplicatedStorage.Library ModuleScript`,
+the place may still be correct. Do **not** increase the timeout or repeatedly
+run the hanging native call. Rejoin the Classic Event in a fresh client, then
+choose **Farm → Module path → Direct** before running the compatibility check.
+For pet tools choose Direct the same way before clicking **Load pet tools**.
+Direct mode tries the existing `Library.Client.Network`,
+`Library.Client.PetCmds`, `Library.Client.Save`, and `Library.Directory`
+ModuleScripts individually and reports the exact module that stalls.
+It does not fall back automatically from a hung facade or guess remotes.
+Neither module access method is guaranteed to work in the live client.
+The default **Facade** path remains available for reproducibility. To
+switch modes after a successful load, rejoin first.
 
 ## Eggs, gold and rainbow
 

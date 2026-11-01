@@ -2,7 +2,7 @@
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.1",
+    Version = "0.7.2",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -14,6 +14,7 @@ return table.freeze({
         AutoCollectLootbags = false,
         WalkToTarget = false,
         FarmMode = "Nearest",
+        ModulePathMode = "Facade", -- Switch to Direct to test child ModuleScripts without the stalled facade.
         Area = "All",
         NameFilter = "",
         Radius = 200,

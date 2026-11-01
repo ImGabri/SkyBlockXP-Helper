@@ -110,6 +110,7 @@ end
 function PetSim99:_report()
     self.Report = "Probe stage: " .. tostring(self._phase or "not started") .. "\n" .. (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nModule path mode: " .. (self._mode or "Facade")
         .. "\nModule loader: " .. (self._loaderName or "not selected")
         .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
         .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
@@ -295,8 +296,10 @@ function PetSim99:Inspect()
         else table.concat(issues, "; ")
 end
 
-function PetSim99:Connect(active)
+function PetSim99:Connect(active, mode)
     if active and not active() then return self end
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     self._generation += 1
     local generation = self._generation
     local function current()
@@ -345,8 +348,8 @@ function PetSim99:Connect(active)
         if not current() then return end
         self._moduleLoader, self._loaderName = loader, loaderName
         local network, petCmds, world, networkPath
-        if library:IsA("ModuleScript") then
-            -- Use the documented public library rather than bypassing its facade.
+        if library:IsA("ModuleScript") and mode == "Facade" then
+            -- The documented facade is an explicit mode; do not retry an unresolved call through another path.
             self._networkProvider = "ReplicatedStorage.Library"
             networkPath = "ReplicatedStorage.Library.Network"
             self._phase = "Loading ReplicatedStorage.Library ModuleScript"
@@ -364,7 +367,7 @@ function PetSim99:Connect(active)
                 error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
             end
         else
-            -- Compatibility for legacy folder-only layouts; current event has a facade.
+            -- Explicit Direct mode, or legacy folder-only layout. Never a timeout fallback.
             if not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
             local networkModule = client:FindFirstChild("Network")
             networkPath = "Library.Client.Network"
@@ -373,17 +376,24 @@ function PetSim99:Connect(active)
                 networkPath = "Library.Network"
             end
             self._networkProvider = networkPath
-            self._phase = "Loading legacy network ModuleScript"
+            self._phase = "Loading " .. networkPath .. " ModuleScript directly"
             self:_report()
             network = requireModule(networkModule, networkPath, loader)
             if not current() then return end
+            self._phase = "Loading Library.Client.PetCmds ModuleScript directly"
+            self:_report()
             petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
             if not current() then return end
-            local worldModule = client:FindFirstChild("WorldCmds")
-            if worldModule and worldModule:IsA("ModuleScript") then
-                local loaded, value = pcall(loader, worldModule)
-                if not current() then return end
-                if loaded then world = value end
+            -- WorldCmds is optional. Do not let a second native require stall Direct mode.
+            if mode ~= "Direct" then
+                local worldModule = client:FindFirstChild("WorldCmds")
+                if worldModule and worldModule:IsA("ModuleScript") then
+                    self._phase = "Loading optional WorldCmds ModuleScript"
+                    self:_report()
+                    local loaded, value = pcall(loader, worldModule)
+                    if not current() then return end
+                    if loaded then world = value end
+                end
             end
         end
         self._phase = "Inspecting network and pet command exports"

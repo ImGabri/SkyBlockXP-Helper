@@ -128,7 +128,7 @@ function Runtime:PrepareCare()
     self.Jobs:cancel("care")
     self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
-        return self.Care:Connect(activeJob)
+        return self.Care:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, result)
         local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
         self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
@@ -402,6 +402,10 @@ function Runtime:SetOption(key, value)
         return false, self.Adapter.Reason
     end
     if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
+    if key == "ModulePathMode" and (self.Jobs:busy("connect") or self.Jobs:busy("care")
+        or self.Ready or self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow) then
+        return false, "Stop and rejoin before switching module paths; do not overlap native module calls."
+    end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
@@ -505,7 +509,7 @@ function Runtime:Reconnect()
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
-        return self.Adapter:Connect(activeJob)
+        return self.Adapter:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
@@ -527,6 +531,7 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,

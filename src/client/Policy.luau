@@ -38,6 +38,10 @@ function Policy.option(key: string, value: any): (any, string?)
         end
         return math.clamp(number, range[1], range[2]), nil
     end
+    if key == "ModulePathMode" then
+        if value == "Facade" or value == "Direct" then return value, nil end
+        return nil, "Choose Facade or Direct for module loading."
+    end
     if key == "FarmMode" then
         if value == "Nearest" or value == "Weakest" or value == "Strongest" then
             return value, nil

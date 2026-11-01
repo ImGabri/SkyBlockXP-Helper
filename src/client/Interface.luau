@@ -466,6 +466,7 @@ function Interface.mount(spec)
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
+    cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 

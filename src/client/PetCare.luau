@@ -20,7 +20,8 @@ function PetCare.new()
 end
 
 function PetCare:_report()
-    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nModule path mode: " .. (self._mode or "Facade")
+        .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
         .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
@@ -31,7 +32,9 @@ function PetCare:_occupied()
     return self._busy ~= nil
 end
 
-function PetCare:Connect(active)
+function PetCare:Connect(active, mode)
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
@@ -54,32 +57,61 @@ function PetCare:Connect(active)
         end
         if not current() then return end
         self._loader = loaderName
-        self._phase = "Loading pet API facade"
-        self:_report()
-        local facade = loader(library)
-        if not current() then return end
-        if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
-        self._phase = "Reading public Library.Network"
-        self:_report()
-        local network = facade.Network
-        if not current() then return end
+        local network, save, pets, directory
+        if mode == "Direct" then
+            -- Only explicitly named ModuleScripts exposed by the game are used.
+            -- Never run this as a fallback while the facade's require is in flight.
+            local client = library:FindFirstChild("Client")
+            if not client then error("Library.Client ModuleScript is missing; Direct mode unavailable.", 0) end
+            local function direct(parent, name, path)
+                local module = parent:FindFirstChild(name)
+                if not module or not module:IsA("ModuleScript") then
+                    error(path .. " ModuleScript is missing; Direct mode unavailable.", 0)
+                end
+                if not current() then return nil end
+                self._phase = "Loading " .. path .. " directly"
+                self:_report()
+                local exports = loader(module)
+                if not current() then return nil end
+                if type(exports) ~= "table" then error(path .. " did not return a table.", 0) end
+                return exports
+            end
+            network = direct(client, "Network", "Library.Client.Network")
+            if not current() then return end
+            save = direct(client, "Save", "Library.Client.Save")
+            if not current() then return end
+            pets = direct(client, "PetCmds", "Library.Client.PetCmds")
+            if not current() then return end
+            directory = direct(library, "Directory", "Library.Directory")
+            if not current() then return end
+        else
+            self._phase = "Loading pet API facade"
+            self:_report()
+            local facade = loader(library)
+            if not current() then return end
+            if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+            self._phase = "Reading public Library.Network"
+            self:_report()
+            network = facade.Network
+            if not current() then return end
+            self._phase = "Reading public Library.Save"
+            self:_report()
+            save = facade.Save
+            if not current() then return end
+            self._phase = "Reading public Library.PetCmds"
+            self:_report()
+            pets = facade.PetCmds
+            if not current() then return end
+            self._phase = "Reading public Library.Directory"
+            self:_report()
+            directory = facade.Directory
+            if not current() then return end
+        end
         local invoke = type(network) == "table" and network.Invoke
-        if not current() then return end
-        self._phase = "Reading public Library.Save"
-        self:_report()
-        local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
-        self._phase = "Reading public Library.PetCmds"
-        self:_report()
-        local pets = facade.PetCmds
-        if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
-        if not current() then return end
-        self._phase = "Reading public Library.Directory"
-        self:_report()
-        local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
         if not current() then return end

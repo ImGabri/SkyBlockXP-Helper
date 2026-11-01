@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.1",
+    Version = "0.7.2",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -20,6 +20,7 @@ return table.freeze({
         AutoCollectLootbags = false,
         WalkToTarget = false,
         FarmMode = "Nearest",
+        ModulePathMode = "Facade", -- Switch to Direct to test child ModuleScripts without the stalled facade.
         Area = "All",
         NameFilter = "",
         Radius = 200,
@@ -590,6 +591,7 @@ function Interface.mount(spec)
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
+    cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
     actionButton("Farm", "Run compatibility check", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
@@ -1018,7 +1020,8 @@ function PetCare.new()
 end
 
 function PetCare:_report()
-    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nModule path mode: " .. (self._mode or "Facade")
+        .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
         .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
@@ -1029,7 +1032,9 @@ function PetCare:_occupied()
     return self._busy ~= nil
 end
 
-function PetCare:Connect(active)
+function PetCare:Connect(active, mode)
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
@@ -1052,32 +1057,61 @@ function PetCare:Connect(active)
         end
         if not current() then return end
         self._loader = loaderName
-        self._phase = "Loading pet API facade"
-        self:_report()
-        local facade = loader(library)
-        if not current() then return end
-        if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
-        self._phase = "Reading public Library.Network"
-        self:_report()
-        local network = facade.Network
-        if not current() then return end
+        local network, save, pets, directory
+        if mode == "Direct" then
+            -- Only explicitly named ModuleScripts exposed by the game are used.
+            -- Never run this as a fallback while the facade's require is in flight.
+            local client = library:FindFirstChild("Client")
+            if not client then error("Library.Client ModuleScript is missing; Direct mode unavailable.", 0) end
+            local function direct(parent, name, path)
+                local module = parent:FindFirstChild(name)
+                if not module or not module:IsA("ModuleScript") then
+                    error(path .. " ModuleScript is missing; Direct mode unavailable.", 0)
+                end
+                if not current() then return nil end
+                self._phase = "Loading " .. path .. " directly"
+                self:_report()
+                local exports = loader(module)
+                if not current() then return nil end
+                if type(exports) ~= "table" then error(path .. " did not return a table.", 0) end
+                return exports
+            end
+            network = direct(client, "Network", "Library.Client.Network")
+            if not current() then return end
+            save = direct(client, "Save", "Library.Client.Save")
+            if not current() then return end
+            pets = direct(client, "PetCmds", "Library.Client.PetCmds")
+            if not current() then return end
+            directory = direct(library, "Directory", "Library.Directory")
+            if not current() then return end
+        else
+            self._phase = "Loading pet API facade"
+            self:_report()
+            local facade = loader(library)
+            if not current() then return end
+            if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+            self._phase = "Reading public Library.Network"
+            self:_report()
+            network = facade.Network
+            if not current() then return end
+            self._phase = "Reading public Library.Save"
+            self:_report()
+            save = facade.Save
+            if not current() then return end
+            self._phase = "Reading public Library.PetCmds"
+            self:_report()
+            pets = facade.PetCmds
+            if not current() then return end
+            self._phase = "Reading public Library.Directory"
+            self:_report()
+            directory = facade.Directory
+            if not current() then return end
+        end
         local invoke = type(network) == "table" and network.Invoke
-        if not current() then return end
-        self._phase = "Reading public Library.Save"
-        self:_report()
-        local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
-        self._phase = "Reading public Library.PetCmds"
-        self:_report()
-        local pets = facade.PetCmds
-        if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
-        if not current() then return end
-        self._phase = "Reading public Library.Directory"
-        self:_report()
-        local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
         if not current() then return end
@@ -1439,6 +1473,7 @@ end
 function PetSim99:_report()
     self.Report = "Probe stage: " .. tostring(self._phase or "not started") .. "\n" .. (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nModule path mode: " .. (self._mode or "Facade")
         .. "\nModule loader: " .. (self._loaderName or "not selected")
         .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
         .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
@@ -1624,8 +1659,10 @@ function PetSim99:Inspect()
         else table.concat(issues, "; ")
 end
 
-function PetSim99:Connect(active)
+function PetSim99:Connect(active, mode)
     if active and not active() then return self end
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     self._generation += 1
     local generation = self._generation
     local function current()
@@ -1674,8 +1711,8 @@ function PetSim99:Connect(active)
         if not current() then return end
         self._moduleLoader, self._loaderName = loader, loaderName
         local network, petCmds, world, networkPath
-        if library:IsA("ModuleScript") then
-            -- Use the documented public library rather than bypassing its facade.
+        if library:IsA("ModuleScript") and mode == "Facade" then
+            -- The documented facade is an explicit mode; do not retry an unresolved call through another path.
             self._networkProvider = "ReplicatedStorage.Library"
             networkPath = "ReplicatedStorage.Library.Network"
             self._phase = "Loading ReplicatedStorage.Library ModuleScript"
@@ -1693,7 +1730,7 @@ function PetSim99:Connect(active)
                 error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
             end
         else
-            -- Compatibility for legacy folder-only layouts; current event has a facade.
+            -- Explicit Direct mode, or legacy folder-only layout. Never a timeout fallback.
             if not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
             local networkModule = client:FindFirstChild("Network")
             networkPath = "Library.Client.Network"
@@ -1702,17 +1739,24 @@ function PetSim99:Connect(active)
                 networkPath = "Library.Network"
             end
             self._networkProvider = networkPath
-            self._phase = "Loading legacy network ModuleScript"
+            self._phase = "Loading " .. networkPath .. " ModuleScript directly"
             self:_report()
             network = requireModule(networkModule, networkPath, loader)
             if not current() then return end
+            self._phase = "Loading Library.Client.PetCmds ModuleScript directly"
+            self:_report()
             petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
             if not current() then return end
-            local worldModule = client:FindFirstChild("WorldCmds")
-            if worldModule and worldModule:IsA("ModuleScript") then
-                local loaded, value = pcall(loader, worldModule)
-                if not current() then return end
-                if loaded then world = value end
+            -- WorldCmds is optional. Do not let a second native require stall Direct mode.
+            if mode ~= "Direct" then
+                local worldModule = client:FindFirstChild("WorldCmds")
+                if worldModule and worldModule:IsA("ModuleScript") then
+                    self._phase = "Loading optional WorldCmds ModuleScript"
+                    self:_report()
+                    local loaded, value = pcall(loader, worldModule)
+                    if not current() then return end
+                    if loaded then world = value end
+                end
             end
         end
         self._phase = "Inspecting network and pet command exports"
@@ -1934,6 +1978,10 @@ function Policy.option(key: string, value: any): (any, string?)
         end
         return math.clamp(number, range[1], range[2]), nil
     end
+    if key == "ModulePathMode" then
+        if value == "Facade" or value == "Direct" then return value, nil end
+        return nil, "Choose Facade or Direct for module loading."
+    end
     if key == "FarmMode" then
         if value == "Nearest" or value == "Weakest" or value == "Strongest" then
             return value, nil
@@ -2128,7 +2176,7 @@ function Runtime:PrepareCare()
     self.Jobs:cancel("care")
     self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
-        return self.Care:Connect(activeJob)
+        return self.Care:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, result)
         local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
         self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
@@ -2402,6 +2450,10 @@ function Runtime:SetOption(key, value)
         return false, self.Adapter.Reason
     end
     if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
+    if key == "ModulePathMode" and (self.Jobs:busy("connect") or self.Jobs:busy("care")
+        or self.Ready or self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow) then
+        return false, "Stop and rejoin before switching module paths; do not overlap native module calls."
+    end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
@@ -2505,7 +2557,7 @@ function Runtime:Reconnect()
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
-        return self.Adapter:Connect(activeJob)
+        return self.Adapter:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
@@ -2527,6 +2579,7 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
