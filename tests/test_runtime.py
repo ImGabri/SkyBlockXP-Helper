@@ -327,6 +327,21 @@ assert(care.HatchCalls == 1)
 runtime:Destroy()
 ''')
 
+    def test_changed_loaded_egg_after_walking_never_sends_a_purchase(self):
+        self.run_case('''
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName", "Starter Egg")
+local lookups = 0
+function care:GetEggTarget(egg, active)
+    lookups += 1
+    return if lookups == 1 then self.SelectedEggTarget else { Name = "Replacement egg" }
+end
+assert(runtime:Action("HatchOnce"))
+assert(care.HatchCalls == 0, "egg target changed during walking but a purchase was sent")
+contains(runtime.State.LastError, "Selected egg changed")
+runtime:Destroy()
+''')
+
     def test_low_currency_waits_and_auto_hatch_resumes_when_ready(self):
         self.run_case('''
 runtime:Action("PrepareCare")
