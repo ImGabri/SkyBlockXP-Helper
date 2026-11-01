@@ -2,7 +2,7 @@
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.6.0",
+    Version = "0.6.1",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -32,7 +32,7 @@ return table.freeze({
         Fullbright = false,
         AntiIdle = false,
     }),
-    RequestTimeout = 12,
+    RequestTimeout = 30,
     FarmTimeout = 60,
     RetryLimit = 3,
     ReassignSeconds = 10,

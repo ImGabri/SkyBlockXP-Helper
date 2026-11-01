@@ -123,7 +123,7 @@ function Runtime:PrepareCare()
         return self.Care:Connect(activeJob)
     end, function(ok, result)
         self.State.CareStatus = if ok then self.Care.Reason else "Pet tools failed to load"
-        self.State.LastError = if ok then "" else tostring(result)
+        self.State.LastError = if ok then "" else tostring(result) .. " [Pet stage: " .. tostring(self.Care._phase or "unknown") .. "]"
         self:Publish()
     end)
     if not started then return false, "A previous pet operation is still returning; no new request sent." end
@@ -413,7 +413,7 @@ function Runtime:Reconnect()
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
-        self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) else self.Adapter.Reason
+        self.State.LastError = if self.Ready then "" elseif not ok then tostring(message) .. " [Probe stage: " .. tostring(self.Adapter._phase or "unknown") .. "]" else self.Adapter.Reason
         self:Publish()
     end)
     if not started then
@@ -428,6 +428,9 @@ function Runtime:Diagnostics()
     return table.concat({
         Config.Name .. " v" .. Config.Version,
         "Startup makes no game-module or network probe. The compatibility check is manual.",
+        "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
+        "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
+        "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
         self.Adapter.Report,
         self.Care.Report,
         "Options: " .. HttpService:JSONEncode(self.Options),

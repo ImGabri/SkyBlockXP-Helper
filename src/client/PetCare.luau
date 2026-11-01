@@ -20,7 +20,7 @@ function PetCare.new()
 end
 
 function PetCare:_report()
-    self.Report = "Pet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
         .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
@@ -38,6 +38,8 @@ function PetCare:Connect(active)
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
+    self._phase = "Checking game and public Library"
+    self:_report()
     local ok, message = pcall(function()
         if self._destroyed then error("Pet tools unloaded.", 0) end
         if not samePlace() then error("Load pet tools inside the Classic Event destination.", 0) end
@@ -51,6 +53,8 @@ function PetCare:Connect(active)
             end
         end
         if not current() then return end
+        self._phase = "Loading pet API facade"
+        self:_report()
         local facade = loader(library)
         if not current() then return end
         if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
@@ -75,6 +79,8 @@ function PetCare:Connect(active)
         if type(invoke) ~= "function" or type(getSave) ~= "function" then
             error("Public Network.Invoke / Save.Get unavailable. No private networking fallback attempted.", 0)
         end
+        self._phase = "Pet API exports validated"
+        self:_report()
         self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
             eggs = eggDirectory, pets = petDirectory }
         self._loader = loaderName
