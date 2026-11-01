@@ -153,6 +153,7 @@ local expected = {
     ["Open rainbow menu"]="OpenRainbowMenu", ["Open inventory"]="OpenInventory",
     ["Next egg"]="NextEgg", ["Next conversion species"]="NextSpecies",
     ["Clear status error"]="ClearError",
+    ["Go to gold machine"]="GoGoldMachine", ["Go to rainbow machine"]="GoRainbowMachine",
 }
 local buttons = {}
 for caption, actionName in pairs(expected) do
@@ -201,6 +202,9 @@ assert(changes[#changes][1] == "EggName" and changes[#changes][2] == "Spotted Eg
 local mode = control("Hatch mode", "TextButton")
 mode.Activated:Fire()
 assert(changes[#changes][1] == "HatchMode" and changes[#changes][2] == "Triple")
+local travel = control("Machine travel", "TextButton")
+travel.Activated:Fire()
+assert(changes[#changes][1] == "MachineTravelMode" and changes[#changes][2] == "Off")
 local rainbow = control("Auto rainbow (6 gold pets)", "TextButton")
 rainbow.Activated:Fire()
 assert(changes[#changes][1] == "AutoRainbow" and changes[#changes][2] == true)
