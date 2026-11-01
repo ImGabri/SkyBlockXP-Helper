@@ -156,6 +156,7 @@ function Runtime:StartCare(key, manual)
         end
         if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
         local variant = if key == "AutoGold" then "Gold" else "Rainbow"
+        if not self.Care:CanConvert(variant, species, current) or not current() then return 0 end
         if travel then
             self.Jobs:cancel("AutoFarm")
             self:StopNavigation()

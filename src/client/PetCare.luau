@@ -224,55 +224,71 @@ local function unlockedSlot(playerGui, uid)
     return not favorite or favorite.Visible == false
 end
 
+function PetCare:_conversionBatch(variant, selected, current)
+    local id, definition = speciesId(self._api.pets, selected)
+    if not current() then return nil end
+    if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
+    local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
+        or definition.rarity == "Exclusive" or definition.rarity == "Event"
+    local save = self._api.getSave()
+    if not current() then return nil end
+    if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    local equipped = self._api.getEquipped()
+    if not current() then return nil end
+    if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
+    local worn = {}
+    for _, pet in pairs(equipped) do
+        if type(pet) ~= "table" or not text(pet.uid) then error("Unknown equipped-pet schema.", 0) end
+        worn[pet.uid] = true
+    end
+    local normalized, present = {}, {}
+    local player = game:GetService("Players").LocalPlayer
+    local gui = player and player:FindFirstChild("PlayerGui")
+    for _, pet in pairs(save.Pets) do
+        if type(pet) ~= "table" or not text(pet.uid) or (type(pet.id) ~= "string" and type(pet.id) ~= "number") then
+            error("Unknown inventory pet schema; no conversion sent.", 0)
+        end
+        present[pet.uid] = true
+        local protected = premium or self._reserved[pet.uid] or false
+        for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "l", "lk", "locked", "favorite", "fav" }) do
+            if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
+        end
+        protected = protected or pet.dm or pet.hc or pet.sh or pet.l or pet.lk or pet.locked or pet.favorite or pet.fav
+            or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
+        local unlocked = unlockedSlot(gui, pet.uid)
+        table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),
+            variant = if pet.r then "Rainbow" elseif pet.g then "Gold" else "Normal",
+            protected = protected == true, equipped = worn[pet.uid] == true,
+            eligible = tostring(pet.id) == id and unlocked and not protected })
+    end
+    if not current() then return nil end
+    for uid in pairs(self._reserved) do if not present[uid] then self._reserved[uid] = nil end end
+    local batch, reason = ConversionPolicy.NextBatch(normalized, variant)
+    if not batch then
+        self.Reason = (reason or "No eligible batch.") .. " Open Inventory to load lock indicators; select one species."
+        self:_report()
+        return nil
+    end
+    if not current() then return nil end
+    return batch
+end
+
+function PetCare:CanConvert(variant, selected, active)
+    local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
+    if not key then error("Choose Gold or Rainbow conversion.", 0) end
+    local result = self:_run(key, active, function(current)
+        local batch = self:_conversionBatch(variant, selected, current)
+        return batch ~= nil and current()
+    end)
+    return result == true
+end
+
 function PetCare:Convert(variant, selected, active)
     local key = if variant == "Gold" then "AutoGold" elseif variant == "Rainbow" then "AutoRainbow" else nil
     if not key then error("Choose Gold or Rainbow conversion.", 0) end
     return self:_run(key, active, function(current)
-        local id, definition = speciesId(self._api.pets, selected)
-        if not current() then return 0 end
-        if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
-        local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
-            or definition.rarity == "Exclusive" or definition.rarity == "Event"
-        local save = self._api.getSave()
-        if not current() then return 0 end
-        if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
-        local equipped = self._api.getEquipped()
-        if not current() then return 0 end
-        if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
-        local worn = {}
-        for _, pet in pairs(equipped) do
-            if type(pet) ~= "table" or not text(pet.uid) then error("Unknown equipped-pet schema.", 0) end
-            worn[pet.uid] = true
-        end
-        local normalized, present = {}, {}
-        local player = game:GetService("Players").LocalPlayer
-        local gui = player and player:FindFirstChild("PlayerGui")
-        for _, pet in pairs(save.Pets) do
-            if type(pet) ~= "table" or not text(pet.uid) or (type(pet.id) ~= "string" and type(pet.id) ~= "number") then
-                error("Unknown inventory pet schema; no conversion sent.", 0)
-            end
-            present[pet.uid] = true
-            local protected = premium or self._reserved[pet.uid] or false
-            for _, flag in ipairs({ "g", "r", "dm", "hc", "sh", "l", "lk", "locked", "favorite", "fav" }) do
-                if pet[flag] ~= nil and type(pet[flag]) ~= "boolean" then protected = true end
-            end
-            protected = protected or pet.dm or pet.hc or pet.sh or pet.l or pet.lk or pet.locked or pet.favorite or pet.fav
-                or (text(pet.nk)) or (type(pet.e) == "table" and next(pet.e) ~= nil)
-            local unlocked = unlockedSlot(gui, pet.uid)
-            table.insert(normalized, { uid = pet.uid, species = tostring(pet.id),
-                variant = if pet.r then "Rainbow" elseif pet.g then "Gold" else "Normal",
-                protected = protected == true, equipped = worn[pet.uid] == true,
-                eligible = tostring(pet.id) == id and unlocked and not protected })
-        end
-        if not current() then return 0 end
-        for uid in pairs(self._reserved) do if not present[uid] then self._reserved[uid] = nil end end
-        local batch, reason = ConversionPolicy.NextBatch(normalized, variant)
-        if not batch then
-            self.Reason = (reason or "No eligible batch.") .. " Open Inventory to load lock indicators; select one species."
-            self:_report()
-            return 0
-        end
-        if not current() then return 0 end
+        local batch = self:_conversionBatch(variant, selected, current)
+        if not batch or not current() then return 0 end
         -- Reserve before the request: an uncertain/late reply must never replay UIDs.
         for _, uid in ipairs(batch) do self._reserved[uid] = true end
         local ok, result = pcall(self._request, self, key,
