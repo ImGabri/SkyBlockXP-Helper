@@ -33,6 +33,7 @@ function Runtime.new(player, parent)
     })
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
+        if self.Options.HeavenChestAssist then self:StopHeavenChest() end
         self.Jobs:cancel("care")
         self.Navigator:Stop()
         self:StopNavigation()
@@ -82,6 +83,88 @@ function Runtime.new(player, parent)
         end
     end)
     return self
+end
+
+-- Heaven Island chest input helper. Does not use Save.Get, game remotes or
+-- the legacy Get Coins protocol. It clicks once per captured BasePart instance
+-- and waits until that part disappears before clicking a matching replacement.
+-- The actual game-side response is not confirmed by a synthetic click.
+function Runtime:ArmHeavenChest()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" then
+        return false, "This executor has no mouse1click() support."
+    end
+    self.Options.HeavenChestAssist = true
+    self.ChestArmAt = os.clock() + 3
+    self.ChestClickedPart, self.ChestAnchorPosition = nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Move your cursor over the Heaven chest: capturing in 3 seconds."
+    self.State.LastError = ""
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenChest()
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Stopped"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenChest()
+    if not self.Options.HeavenChestAssist then return end
+    local character = self.Player.Character
+    if not character or not character.Parent then return end
+    if type(mouse1click) ~= "function" then
+        self.State.LastError = "Heaven chest input unsupported: mouse1click() is missing."
+        self:StopHeavenChest()
+        return
+    end
+    local mouse = self.Player:GetMouse()
+    local target = mouse and mouse.Target
+    local function usable(part)
+        return part and part:IsA("BasePart") and part:IsDescendantOf(workspace)
+            and not part:IsDescendantOf(character)
+    end
+    if self.ChestArmAt then
+        if os.clock() < self.ChestArmAt then return end
+        self.ChestArmAt = nil
+        if not usable(target) then
+            self.State.LastError = "No world BasePart under cursor. Aim at the chest when arming."
+            self:StopHeavenChest()
+            return
+        end
+        self.ChestAnchorName = target.Name
+        self.ChestAnchorParent = target.Parent and target.Parent.Name or ""
+        self.ChestAnchorPosition = target.Position
+        self.State.ChestStatus = "Captured " .. target.Name .. "; initial click pending"
+    end
+    if not self.ChestAnchorPosition then return end
+    if self.ChestClickedPart then
+        if self.ChestClickedPart:IsDescendantOf(workspace) then return end
+        self.ChestClickedPart = nil
+        self.State.ChestStatus = "Chest disappeared; waiting for matching respawn under cursor"
+        self:Publish()
+    end
+    if not usable(target) or target.Name ~= self.ChestAnchorName
+        or (target.Parent and target.Parent.Name or "") ~= self.ChestAnchorParent
+        or (target.Position - self.ChestAnchorPosition).Magnitude > 12 then return end
+    if type(isrbxactive) == "function" then
+        local ok, active = pcall(isrbxactive)
+        if not ok or not active then return end
+    end
+    local ok, result = pcall(mouse1click)
+    if not ok then
+        self.State.LastError = "Heaven chest click failed: " .. tostring(result)
+        self:StopHeavenChest()
+        return
+    end
+    self.ChestClickedPart = target
+    self.State.ChestClicks = (self.State.ChestClicks or 0) + 1
+    self.State.ChestStatus = "Clicked once; waiting for chest to disappear (rewards unverified)"
+    self:Publish()
 end
 
 function Runtime:StopNavigation()
@@ -245,6 +328,7 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
+    self:StepHeavenChest()
     self:StepCare()
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
         or (self.MachineJourney and self.MachineJourney())) then
@@ -426,6 +510,10 @@ function Runtime:SetOption(key, value)
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
+    if key == "HeavenChestAssist" and not parsed then
+        self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+        self.State.ChestStatus = "Stopped"
+    end
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
@@ -482,6 +570,8 @@ function Runtime:StopAll()
     self:StopNavigation()
     self.LastAssignment = nil
     self.NextAt = {}
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.State.ChestStatus = "Stopped"
     for key, value in pairs(self.Options) do
         if type(value) == "boolean" then self.Options[key] = false end
     end
@@ -560,6 +650,8 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Heaven chest input assist: " .. tostring(self.State.ChestStatus or "off")
+            .. "; attempted clicks=" .. tostring(self.State.ChestClicks or 0),
         "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
@@ -573,6 +665,8 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "ArmHeavenChest" then return self:ArmHeavenChest()
+    elseif action == "StopHeavenChest" then return self:StopHeavenChest()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
     elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()

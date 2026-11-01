@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.5**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.8.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.5. Startup is passive and all automation starts off.
+Confirm the title shows v0.8.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -89,6 +89,32 @@ folder. It does not interpret non-model children as coins. Debug listings
 combine repeated names (e.g., identical RemoteEvent entries) to make reports
 shorter. The previously seen `Get Coins` zero-value response remains
 unsupported and will not be guessed or replaced with unverified data.
+
+## v0.8.0: Heaven Island chest cursor assist
+
+The current PSX Classic Event does not return a coin dictionary from the legacy
+`Get Coins` call, and the user's Heaven Island local coin-model inspection was
+empty. This version adds a separate **Arm Heaven chest: aim within 3 seconds**
+button under Farm. It works independently of the blocked legacy AutoFarm and
+never loads pet tools, calls Save.Get or sends network remotes.
+
+1. Stand in Heaven Island, equip pets normally, and verify clicking the chest
+   manually sends them to attack.
+2. Click **Arm Heaven chest**. Within 3 seconds move the mouse cursor to the
+   actual chest (not a GUI overlay), and leave the camera/cursor stationary.
+3. The suite sends one `mouse1click()` input at that position. It waits until
+   the targeted part leaves the Workspace, then clicks one matching replacement
+   within 12 studs of the original part. This avoids click-spamming pets off
+   a still-live chest.
+4. **Stop Heaven chest assist** or **STOP ALL** immediately disables it. Closing
+   Roblox or switching areas also requires re-arming.
+
+This is a limited cursor assist **not verified automatic farming**:
+the input function must be supported by the executor, the chest must expose a
+clickable BasePart, and chest destruction must actually replace/remove it.
+If the chest reuses the same instance or clicking doesn't select it, the helper
+will not auto-retarget. It does not farm every breakable on Heaven Island or
+confirm any reward. It does not bypass game limits.
 
 ## Eggs, gold and rainbow
 

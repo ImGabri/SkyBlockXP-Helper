@@ -456,7 +456,9 @@ function Interface.mount(spec)
         end)
     end
 
-    toggle("Farm", "Auto farm", "AutoFarm")
+    toggle("Farm", "Auto farm (legacy: requires coin protocol)", "AutoFarm")
+    actionButton("Farm", "Arm Heaven chest: aim within 3 seconds", "ArmHeavenChest")
+    actionButton("Farm", "Stop Heaven chest assist", "StopHeavenChest")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -542,7 +544,8 @@ function Interface.mount(spec)
             tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
-        )
+        ) .. "\n\nHEAVEN CHEST ASSIST\n" .. tostring(snapshot.ChestStatus or "Off")
+            .. "\nClicks attempted: " .. tostring(snapshot.ChestClicks or 0)
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")
     actionButton("Status", "Clear status error", "ClearError")

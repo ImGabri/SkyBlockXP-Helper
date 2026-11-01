@@ -229,6 +229,57 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("RUNTIME_TEST_OK", result.stdout)
 
+    def test_chest_cursor_assist_clicks_only_once_until_target_removed(self):
+        self.run_case('''
+local vectorMeta = { __sub = function(a, b)
+    return { Magnitude = math.abs(a.X - b.X) }
+end }
+local function chest()
+    local item = { Name = "Heaven Chest", Parent = workspace,
+        Position = setmetatable({ X = 10 }, vectorMeta) }
+    function item:IsA(kind) return kind == "BasePart" end
+    function item:IsDescendantOf(other) return self.Parent == other end
+    return item
+end
+local currentTarget = chest()
+player.GetMouse = function() return { Target = currentTarget } end
+local clicks = 0
+mouse1click = function() clicks += 1 end
+assert(runtime:Action("ArmHeavenChest"))
+assert(not runtime.Ready and adapter.NativeCalls == 0)
+runtime:Step()
+assert(clicks == 0, "clicked before the aim countdown")
+clock += 4
+runtime:Step()
+assert(clicks == 1, "first chest never clicked")
+runtime:Step()
+assert(clicks == 1, "chest was clicked again while still alive")
+local old = currentTarget
+currentTarget = chest()
+runtime:Step()
+assert(clicks == 1, "changed target was clicked before previous chest disappeared")
+old.Parent = nil
+runtime:Step()
+assert(clicks == 2, "matching respawn was not clicked")
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0, "cursor assist loaded game APIs")
+assert(runtime:Action("StopHeavenChest"))
+old = currentTarget
+old.Parent = nil
+currentTarget = chest()
+runtime:Step()
+assert(clicks == 2, "stopped assist kept clicking")
+runtime:Destroy()
+''')
+
+    def test_chest_cursor_assist_requires_input_capability(self):
+        self.run_case('''
+mouse1click = nil
+local ok, message = runtime:Action("ArmHeavenChest")
+assert(not ok and string.find(message, "mouse1click", 1, true))
+assert(not runtime.Options.HeavenChestAssist)
+runtime:Destroy()
+''')
+
     def test_startup_is_passive_until_explicit_manual_reconnect(self):
         self.run_case('''
 assert(adapter.ConnectCalls == 0 and adapter.NativeCalls == 0, "startup invoked game-native discovery without manual reconnect")
