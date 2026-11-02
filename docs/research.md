@@ -284,3 +284,33 @@ health values, and sends Farm Coin only after explicit true acceptance. Join
 strings remain rejection text. These extensions do not establish live network
 acceptance. Current public loading, server responses, actual machine/path layouts
 and farming success still require an executed client test.
+
+## v0.8 — selected-egg walking and final-boundary checks
+
+The shared chat's HTML title confirms it is **Skript analysieren**. A fresh
+HTTP200 fetch was compared with the earlier snapshot: the conversation/code was
+unchanged; only timing/trace metadata and safe-URL ordering differed. Its old
+initialization failure remains relevant, but no new live result was inferred.
+
+The previously pinned Classic-oriented sample identifies loaded egg Models via
+public WorldCmds.GetAllEggs and their ID attribute, with a Center part. Our
+implementation resolves only a unique matching loaded Model and walks normally
+to its Center. It does not copy the sample's pivot fallback, identity changes,
+private remotes or teleporting. Missing data leads to an explicit error or manual
+Off mode. No new current-game networking contract has been verified.
+
+CanHatch now checks the selected directory entry and currency before travel,
+waits without spending when insufficient, and rechecks before purchase. The
+directory price is conservative: mastery/hardcore/server discounts were not
+independently established, so this is not a live price calculation. Conversion
+and hatch requests require the same living character/root/humanoid throughout.
+Loaded egg identity is rechecked on arrival. Capture guards then recheck target
+identity, position and actual proximity after any yielding native inventory read
+and immediately before request submission. Guards do not call yielding game APIs
+or recurse through operation tokens.
+
+The local workflow tests now combine the real Runtime, Jobs, PetCare and
+navigation modules against explicit game/UI boundaries. They reproduce moving
+away during a post-arrival save read, death during pathfinding, currency waiting
+and walking before hatch/gold/rainbow. These validate local contracts, not live
+Solara execution, real geometry, current egg data or server acceptance.

@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.7.1",
+    Version = "0.8.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -30,6 +30,7 @@ return table.freeze({
         EggName = "",
         HatchMode = "Single",
         HatchInterval = 3,
+        EggTravelMode = "Walk",
         ConversionSpecies = "",
         ConversionInterval = 3,
         MachineTravelMode = "Walk",
@@ -151,6 +152,7 @@ local defaults = {
     EggName = "",
     HatchMode = "Single",
     HatchInterval = 2,
+    EggTravelMode = "Walk",
     AutoHatch = false,
     ConversionSpecies = "",
     ConversionInterval = 3,
@@ -609,6 +611,8 @@ function Interface.mount(spec)
     actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
     input("Pets", "Hatch interval (seconds)", "HatchInterval", 1, 30)
+    cycle("Pets", "Egg travel", "EggTravelMode", { "Walk", "Off" })
+    actionButton("Pets", "Go to selected egg", "GoSelectedEgg")
     actionButton("Pets", "Open egg once", "HatchOnce")
     toggle("Pets", "Auto hatch", "AutoHatch")
     actionButton("Pets", "Open egg menu", "OpenEggMenu")
@@ -880,9 +884,14 @@ end
 function Navigation:_halt(state)
     if not state or not state.moving then return end
     state.moving = false
-    if state.root.Parent and state.humanoid.Parent and position(state.root.Position) then
-        pcall(function() state.humanoid:MoveTo(state.root.Position) end)
-    end
+    local character = self.Player.Character
+    if character ~= state.character or not character.Parent or state.humanoid.Parent ~= character
+        or character:FindFirstChildOfClass("Humanoid") ~= state.humanoid then return end
+    -- A rig may replace its root without replacing the character/humanoid.
+    -- Halt at the current root, never drive that rig toward a captured old part.
+    local root = child(character, "HumanoidRootPart")
+    if not root or not root:IsA("BasePart") or root.Parent ~= character or not position(root.Position) then return end
+    pcall(function() state.humanoid:MoveTo(root.Position) end)
 end
 
 function Navigation:Stop()
@@ -894,11 +903,6 @@ end
 
 function Navigation:Approach(variant, active)
     if active and not active() then return false end
-    if self._owner and coroutine.status(self._owner) == "dead" then
-        self:_halt(self._state)
-        self._state, self._owner = nil, nil
-    end
-    if self._owner then error("A previous machine walk is still returning; no overlapping walk started.", 0) end
     local names = { Gold = "Gold Machine", Rainbow = "Rainbow Machine" }
     local name = names[variant]
     if not name then error("Choose Gold or Rainbow machine navigation.", 0) end
@@ -909,17 +913,52 @@ function Navigation:Approach(variant, active)
     if not machine or not machine:IsA("Model") or not pad or not pad:IsA("BasePart") or not position(pad.Position) then
         error(name .. " has no loaded __MAP.Interactive model with a Pad part. Enter its world and load the machine normally.", 0)
     end
+    local target = pad.Position
+    return self:_walk(name, target, function()
+        return workspace:FindFirstChild("__MAP") == map and map.Parent ~= nil
+            and child(map, "Interactive") == interactive and interactive.Parent == map
+            and child(interactive, name) == machine and machine.Parent == interactive
+            and child(machine, "Pad") == pad and pad.Parent == machine and position(pad.Position)
+            and (pad.Position - target).Magnitude <= 0.1
+    end, active)
+end
+
+function Navigation:ApproachEgg(model, active)
+    if active and not active() then return false end
+    if typeof(model) ~= "Instance" or not model:IsA("Model") or not model:IsDescendantOf(workspace) then
+        error("The selected egg is not a loaded workspace Model. Enter its world and load it normally.", 0)
+    end
+    local center = child(model, "Center")
+    if not center or not center:IsA("BasePart") or not position(center.Position) then
+        error("The selected egg has no loaded Center part with a readable position.", 0)
+    end
+    local target = center.Position
+    local eggId = model:GetAttribute("ID")
+    local name = "egg " .. model.Name
+    return self:_walk(name, target, function()
+        return model:IsDescendantOf(workspace) and model:GetAttribute("ID") == eggId and child(model, "Center") == center
+            and center.Parent == model and position(center.Position)
+            and (center.Position - target).Magnitude <= 0.1
+    end, active)
+end
+
+function Navigation:_walk(name, target, stillLoaded, active)
+    if active and not active() then return false end
+    if self._owner and coroutine.status(self._owner) == "dead" then
+        self:_halt(self._state)
+        self._state, self._owner = nil, nil
+    end
+    if self._owner then error("A previous machine walk is still returning; no overlapping walk started.", 0) end
     local character = self.Player.Character
     local root = child(character, "HumanoidRootPart")
     local humanoid = character and character:FindFirstChildOfClass("Humanoid")
     if not character or not character.Parent or not root or not root:IsA("BasePart") or not position(root.Position)
         or not humanoid or not finite(humanoid.Health) or humanoid.Health <= 0 then
-        error("A living character with HumanoidRootPart is required to walk to a machine.", 0)
+        error("A living character with HumanoidRootPart is required to walk to an interaction.", 0)
     end
     local generation = self._generation
     local owner = coroutine.running()
     local state = { character = character, root = root, humanoid = humanoid, moving = false }
-    local target = pad.Position
     local timeout = if finite(Config.TravelTimeout) and Config.TravelTimeout > 0 then Config.TravelTimeout else 60
     local deadline = os.clock() + timeout
     self._state, self._owner = state, owner
@@ -927,16 +966,24 @@ function Navigation:Approach(variant, active)
     local function current()
         if self._generation ~= generation or self._state ~= state or self.Player.Character ~= character
             or not character.Parent or root.Parent ~= character or humanoid.Parent ~= character
+            or child(character, "HumanoidRootPart") ~= root or character:FindFirstChildOfClass("Humanoid") ~= humanoid
             or not finite(humanoid.Health) or humanoid.Health <= 0 or (active and not active()) then return false end
-        if workspace:FindFirstChild("__MAP") ~= map or not map.Parent or child(map, "Interactive") ~= interactive
-            or interactive.Parent ~= map or child(interactive, name) ~= machine or machine.Parent ~= interactive
-            or child(machine, "Pad") ~= pad or pad.Parent ~= machine or not position(pad.Position)
-            or (pad.Position - target).Magnitude > 0.1 then
-            error(name .. " moved or unloaded while walking; no conversion request should be sent.", 0)
+        if not stillLoaded() then
+            error(name .. " moved or unloaded while walking; no interaction request should be sent.", 0)
         end
         if not position(root.Position) then error("Character position became unreadable while walking.", 0) end
         if os.clock() >= deadline then error("Walking to " .. name .. " timed out before verified arrival.", 0) end
         return true
+    end
+
+    -- Remains usable after walking releases its owner/state. It intentionally
+    -- does not call active(): the caller's token may include this guard.
+    local function arrivalGuard()
+        if self._generation ~= generation or self.Player.Character ~= character or not character.Parent
+            or root.Parent ~= character or humanoid.Parent ~= character
+            or child(character, "HumanoidRootPart") ~= root or character:FindFirstChildOfClass("Humanoid") ~= humanoid
+            or not finite(humanoid.Health) or humanoid.Health <= 0 or not position(root.Position) then return false end
+        return stillLoaded() and (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
     end
 
     local ok, result = pcall(function()
@@ -976,9 +1023,9 @@ function Navigation:Approach(variant, active)
         end
         if not current() then return false end
         if (root.Position - target).Magnitude > ARRIVAL_DISTANCE then
-            error("Walking ended too far from " .. name .. "; no conversion request should be sent.", 0)
+            error("Walking ended too far from " .. name .. "; no interaction request should be sent.", 0)
         end
-        self:_progress("Arrived near " .. name .. "; checking conversion eligibility.")
+        self:_progress("Arrived near " .. name .. "; checking interaction eligibility.")
         if not current() then return false end
         return (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
     end)
@@ -987,7 +1034,7 @@ function Navigation:Approach(variant, active)
     if self._state == state then self._state = nil end
     if self._owner == owner then self._owner = nil end
     if not ok then error(result, 0) end
-    return result
+    return result, if result == true then arrivalGuard else nil
 end
 
 return Navigation
@@ -1089,7 +1136,7 @@ function PetCare:Connect(active)
         self._phase = "Pet API exports validated"
         self:_report()
         self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
-            eggs = eggDirectory, pets = petDirectory }
+            eggs = eggDirectory, pets = petDirectory, facade = facade }
         self._loader = loaderName
         self.Supported.AutoHatch = type(eggDirectory) == "table"
         local conversion = type(petDirectory) == "table" and type(getEquipped) == "function"
@@ -1148,22 +1195,75 @@ function PetCare:_request(key, command, counter, current, ...)
     return 1
 end
 
+function PetCare:_hatchPlan(eggName, mode, current)
+    if not text(eggName) then error("Enter an exact egg directory name first.", 0) end
+    local count = if mode == "Single" then 1 elseif mode == "Triple" then 3 elseif mode == "Octuple" then 8 else nil
+    if not count then error("Choose Single, Triple or Octuple hatch mode.", 0) end
+    local egg = self._api.eggs[eggName]
+    if not current() then return nil end
+    if type(egg) ~= "table" or egg.hatchable ~= true or egg.disabled or egg.isPremium
+        or not text(egg.currency) or egg.currency:lower() == "robux" or not number(egg.cost) or egg.cost <= 0 then
+        error("Unknown, unavailable or premium egg. Select a hatchable in-game currency egg.", 0)
+    end
+    self._phase = "Reading hatch balance via Save.Get"
+    self:_report()
+    local save = self._api.getSave()
+    if not current() then return nil end
+    if type(save) ~= "table" or not number(save[egg.currency]) then
+        error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
+    end
+    if save[egg.currency] < egg.cost * count then
+        self._phase = "Waiting for hatch currency"
+        self.Reason = "Waiting for " .. tostring(egg.cost * count) .. " " .. egg.currency .. " at the egg directory price."
+        self:_report()
+        return nil
+    end
+    return { Count = count }
+end
+
+function PetCare:CanHatch(eggName, mode, active)
+    local ready = self:_run("AutoHatch", active, function(current)
+        return self:_hatchPlan(eggName, mode, current) ~= nil and current()
+    end)
+    return ready == true
+end
+
+function PetCare:GetEggTarget(eggName, active)
+    local result = self:_run("AutoHatch", active, function(current)
+        if not text(eggName) or type(self._api.eggs[eggName]) ~= "table" then error("Select an exact egg directory name first.", 0) end
+        if not current() then return nil end
+        self._phase = "Reading public Library.WorldCmds for loaded eggs"
+        self:_report()
+        local available, world = pcall(function() return self._api.facade.WorldCmds end)
+        if not current() then return nil end
+        local getEggs = available and type(world) == "table" and world.GetAllEggs
+        if not current() then return nil end
+        if type(getEggs) ~= "function" then
+            error("Public WorldCmds.GetAllEggs is unavailable. Use Egg travel Off and approach the egg manually.", 0)
+        end
+        self._phase = "Reading loaded eggs via WorldCmds.GetAllEggs"
+        self:_report()
+        local eggs = getEggs()
+        if not current() then return nil end
+        if type(eggs) ~= "table" then error("GetAllEggs returned an unsupported list.", 0) end
+        local selected
+        for _, model in pairs(eggs) do
+            if typeof(model) ~= "Instance" or not model:IsA("Model") then error("GetAllEggs contains an unknown entry.", 0) end
+            if model:GetAttribute("ID") == eggName and model:IsDescendantOf(workspace) then
+                if selected then error("Multiple loaded egg models share this ID; approach the exact egg manually with Egg travel Off.", 0) end
+                selected = model
+            end
+        end
+        if not current() then return nil end
+        if not selected then error("Selected egg is not loaded in this world. Enter its unlocked area normally, then retry.", 0) end
+        return selected
+    end)
+    return if result == 0 then nil else result
+end
+
 function PetCare:Hatch(eggName, mode, active)
     return self:_run("AutoHatch", active, function(current)
-        if not text(eggName) then error("Enter an exact egg directory name first.", 0) end
-        local count = if mode == "Single" then 1 elseif mode == "Triple" then 3 elseif mode == "Octuple" then 8 else nil
-        if not count then error("Choose Single, Triple or Octuple hatch mode.", 0) end
-        local egg = self._api.eggs[eggName]
-        if not current() then return 0 end
-        if type(egg) ~= "table" or egg.hatchable ~= true or egg.disabled or egg.isPremium
-            or not text(egg.currency) or egg.currency:lower() == "robux" or not number(egg.cost) or egg.cost <= 0 then
-            error("Unknown, unavailable or premium egg. Select a hatchable in-game currency egg.", 0)
-        end
-        local save = self._api.getSave()
-        if not current() then return 0 end
-        if type(save) ~= "table" or not number(save[egg.currency]) or save[egg.currency] < egg.cost * count then
-            error("Insufficient or unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
-        end
+        if not self:_hatchPlan(eggName, mode, current) or not current() then return 0 end
         return self:_request("AutoHatch", "Buy Egg", "HatchRequests", current, eggName, mode == "Triple", mode == "Octuple")
     end)
 end
@@ -1228,9 +1328,13 @@ function PetCare:_conversionBatch(variant, selected, current)
     if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
     local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
         or definition.rarity == "Exclusive" or definition.rarity == "Event"
+    self._phase = "Reading conversion inventory via Save.Get"
+    self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
     if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    self._phase = "Reading equipped pets via PetCmds.GetEquipped"
+    self:_report()
     local equipped = self._api.getEquipped()
     if not current() then return nil end
     if type(equipped) ~= "table" then error("Equipped pet records are unreadable; conversion stopped.", 0) end
@@ -1944,9 +2048,9 @@ function Policy.option(key: string, value: any): (any, string?)
         if value == "Single" or value == "Triple" or value == "Octuple" then return value, nil end
         return nil, "Choose Single, Triple or Octuple."
     end
-    if key == "MachineTravelMode" then
+    if key == "MachineTravelMode" or key == "EggTravelMode" then
         if value == "Walk" or value == "Off" then return value, nil end
-        return nil, "Choose Walk or Off for machine travel."
+        return nil, "Choose Walk or Off for travel."
     end
     if key == "Area" or key == "NameFilter" or key == "EggName" or key == "ConversionSpecies" then
         if type(value) ~= "string" then
@@ -2141,31 +2245,68 @@ function Runtime:PrepareCare()
     return true
 end
 
+function Runtime:LivingCharacter()
+    local character = self.Player.Character
+    local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    if not character or not character.Parent or not humanoid or humanoid.Parent ~= character
+        or type(humanoid.Health) ~= "number" or not (humanoid.Health > 0)
+        or not root or root.Parent ~= character then return nil end
+    return character, humanoid, root
+end
+
 function Runtime:StartCare(key, manual)
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
-    local character = self.Player.Character
-    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before using pet tools." end
     local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
-    local travel = self.Options.MachineTravelMode == "Walk" and key ~= "AutoHatch"
+    local travel = if key == "AutoHatch" then self.Options.EggTravelMode == "Walk" else self.Options.MachineTravelMode == "Walk"
     local timeout = Config.RequestTimeout + (if travel then Config.TravelTimeout else 0)
+    local proximityLost = false
     local started = self.Jobs:start("care", timeout, function(activeJob)
+        self.CareMutation = activeJob
+        local arrivalGuard
         local function current()
-            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
-                and (manual or self.Options[key])
+            if not self.Alive or not activeJob() or not (manual or self.Options[key]) then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            if liveCharacter ~= character or liveHumanoid ~= humanoid or liveRoot ~= root then return false end
+            if arrivalGuard and not arrivalGuard() then proximityLost = true; return false end
+            return true
         end
-        if key == "AutoHatch" then return self.Care:Hatch(egg, mode, current) end
+        if key == "AutoHatch" then
+            if not self.Care:CanHatch(egg, mode, current) or not current() then return 0 end
+            if travel then
+                local target = self.Care:GetEggTarget(egg, current)
+                if not target or not current() then return 0 end
+                self.MachineJourney = activeJob
+                self.Jobs:cancel("AutoFarm")
+                self:StopNavigation()
+                local reached, guard = self.Navigator:ApproachEgg(target, current)
+                if not reached or not current() then return 0 end
+                if type(guard) ~= "function" then error("Egg arrival could not be guarded; no purchase sent.", 0) end
+                arrivalGuard = guard
+                if not current() then return 0 end
+                local arrivedTarget = self.Care:GetEggTarget(egg, current)
+                if not current() then return 0 end
+                if arrivedTarget ~= target then error("Selected egg changed while approaching; no purchase sent.", 0) end
+            end
+            return self.Care:Hatch(egg, mode, current)
+        end
         local variant = if key == "AutoGold" then "Gold" else "Rainbow"
         if not self.Care:CanConvert(variant, species, current) or not current() then return 0 end
         if travel then
             self.Jobs:cancel("AutoFarm")
             self:StopNavigation()
-            if not self.Navigator:Approach(variant, current) then return 0 end
+            local reached, guard = self.Navigator:Approach(variant, current)
+            if not reached or not current() then return 0 end
+            if type(guard) ~= "function" then error("Machine arrival could not be guarded; no conversion sent.", 0) end
+            arrivalGuard = guard
         end
         if not current() then return 0 end
         return self.Care:Convert(variant, species, current)
     end, function(ok, result)
-        self.State.CareStatus = self.Care.Reason
+        self.State.CareStatus = if proximityLost then "Target changed or left range — operation stopped" else self.Care.Reason
         if not ok then
             self.Navigator:Stop()
             self.Options[key] = false
@@ -2180,14 +2321,16 @@ end
 
 function Runtime:GoToMachine(variant, openMenu)
     if not self.Alive then return false, "Suite unloaded." end
-    local character = self.Player.Character
-    if not character or not character.Parent then return false, "Wait for your character to load." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before traveling." end
     self.Jobs:cancel("AutoFarm")
     self:StopNavigation()
     local started = self.Jobs:start("care", Config.TravelTimeout, function(activeJob)
         self.MachineJourney = activeJob
         local function current()
-            return self.Alive and activeJob() and self.Player.Character == character and character.Parent ~= nil
+            if not self.Alive or not activeJob() then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
         end
         if not self.Navigator:Approach(variant, current) or not current() then return false end
         if openMenu then self.Care:OpenMenu(variant) end
@@ -2206,8 +2349,48 @@ function Runtime:GoToMachine(variant, openMenu)
     return true
 end
 
+function Runtime:GoToEgg()
+    if not self.Alive then return false, "Suite unloaded." end
+    local character, humanoid, root = self:LivingCharacter()
+    if not character then return false, "Wait for a living character before traveling." end
+    local egg = self.Options.EggName
+    local started = self.Jobs:start("care", Config.RequestTimeout + Config.TravelTimeout, function(activeJob)
+        self.MachineJourney = activeJob
+        local function current()
+            if not self.Alive or not activeJob() then return false end
+            local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
+            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
+        end
+        local target = self.Care:GetEggTarget(egg, current)
+        if not target or not current() then return false end
+        self.Jobs:cancel("AutoFarm")
+        self:StopNavigation()
+        return self.Navigator:ApproachEgg(target, current)
+    end, function(ok, result)
+        if not ok then
+            self.Navigator:Stop()
+            self.State.LastError = "Egg travel: " .. tostring(result)
+            self.State.CareStatus = "Egg travel stopped — see error"
+        elseif result then self.State.CareStatus = "Arrived at selected egg" end
+        self:Publish()
+    end)
+    if not started then return false, "A pet operation is still returning; no overlapping journey started." end
+    return true
+end
+
 function Runtime:StepCare()
     if not self.Alive then return end
+    if not self:LivingCharacter() then
+        if (self.CareMutation and self.CareMutation()) or (self.MachineJourney and self.MachineJourney()) then
+            self.Jobs:cancel("care")
+            self.Navigator:Stop()
+        end
+        if self.Options.AutoHatch or self.Options.AutoGold or self.Options.AutoRainbow then
+            self.State.CareStatus = "Waiting for a living character — automatic pet actions paused"
+            self:Publish()
+        end
+        return
+    end
     local now = os.clock()
     local features = { "AutoRainbow", "AutoGold", "AutoHatch" }
     local cursor = self.CareCursor or 1
@@ -2420,7 +2603,7 @@ function Runtime:SetOption(key, value)
             self.NextAt[key] = 0
         end
     end
-    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" then
+    if key == "EggName" or key == "HatchMode" or key == "ConversionSpecies" or key == "MachineTravelMode" or key == "EggTravelMode" then
         self.Jobs:cancel("care")
         self.Navigator:Stop()
     end
@@ -2527,6 +2710,8 @@ function Runtime:Diagnostics()
         "Current PlaceId: " .. tostring(game.PlaceId) .. "; UniverseId: " .. tostring(game.GameId),
         "Current probe stage: " .. tostring(self.Adapter._phase or "not started"),
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
+        "Navigation stage: " .. tostring(self.Navigator.Stage or "not started"),
+        "Pet operation status: " .. tostring(self.State.CareStatus),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
@@ -2549,6 +2734,7 @@ function Runtime:Action(action)
         self.State.CareStatus = "Selected " .. caption
         self:Publish()
     elseif action == "HatchOnce" then return self:StartCare("AutoHatch", true)
+    elseif action == "GoSelectedEgg" then return self:GoToEgg()
     elseif action == "GoldOnce" then return self:StartCare("AutoGold", true)
     elseif action == "RainbowOnce" then return self:StartCare("AutoRainbow", true)
     elseif action == "OpenEggMenu" then return self.Care:OpenMenu("Egg")

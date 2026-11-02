@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.7.1**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.8.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,7 +19,7 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.7.1. Startup is passive and all automation starts off.
+Confirm the title shows v0.8.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
@@ -30,7 +30,11 @@ local movement, lighting and menu states owned by the suite.
 2. Use **Next egg** or enter the exact egg directory name. Choose Single, Triple
    or Octuple, then **Open egg once** before enabling Auto hatch. Multiple hatch
    modes require whatever access the server normally requires. Premium/Robux eggs
-   are excluded; the visible currency balance must cover the selected hatch count.
+   are excluded. Auto hatch waits for enough currency, then resumes without
+   switching itself off. The directory price is a conservative affordability
+   check; current server discounts and costs remain authoritative. Leave **Egg
+   travel → Walk** enabled to approach the unique loaded egg model before purchase.
+   **Go to selected egg** walks without buying; **Off** leaves positioning to you.
 3. Click **Open inventory** and let its pet slots load. Use **Next conversion
    species** or enter one exact species name/ID. An empty selection never converts.
 4. Leave **Machine travel → Walk** enabled. The suite checks for an eligible batch,
@@ -92,10 +96,17 @@ Machine walking uses ordinary Roblox pathfinding, with cancellation, jump
 waypoints and a60-second travel deadline. Eight studs is a conservative local
 arrival target, not an authoritative server-range guarantee. Missing/moved pads,
 blocked paths and character replacement stop the trip before a conversion.
-Farm movement pauses during a machine journey.
+Egg walking uses the public WorldCmds.GetAllEggs list and an exact selected ID,
+with a loaded Model and Center part. Missing or ambiguous models are reported;
+enter the correct unlocked area normally or choose Off and approach manually.
+Farm movement pauses during egg or machine journeys. Both travel modes recheck
+target identity, current proximity and the current living rig through native
+inventory reads immediately before submitting a request.
 
 All pet mutations share one job slot; a pending uncancellable request cannot
-be overlapped. Slow conversions cannot starve hatch/gold/rainbow stages. Disable,
+be overlapped. Slow conversions cannot starve hatch/gold/rainbow stages. Pet mutations pause
+while dead, preserve automatic options for respawn, and cannot continue on a
+replaced root/humanoid. Stale cleanup cannot move a replacement rig. Disable,
 timeout, respawn and Stop All cancel follow-up work. Native menus are local visual
 shortcuts; closing/reopening does not bypass any game check.
 
@@ -133,13 +144,13 @@ rename returned403 because the integration lacks administration access.
 
 - `src/client/PetCare.luau`: public-library egg/machine commands and native menus.
 - `src/client/ConversionPolicy.luau`: pure deterministic six-pet selection.
-- `src/client/MachineNavigation.luau`: walking to loaded machine pads.
+- `src/client/MachineNavigation.luau`: walking to loaded machine pads and selected egg Centers.
 - `src/client/PetSim99.luau`: experimental coin adapter and diagnostics.
 - `src/client/Runtime.luau`, `Jobs.luau`: scheduler, utilities, cancellation.
 - `src/client/Interface.luau`, `Config.luau`, `Policy.luau`: UI and settings.
 - `scripts/build.py`: standalone bundler; `tests/`: executable local fixtures.
 - [`docs/research.md`](docs/research.md): pinned public references and limitations.
-- [`v0.7.1 evidence`](docs/releases/0.7.1/ecc-tdd.md): actual RED/GREEN checkpoints.
+- [`v0.8.0 evidence`](docs/releases/0.8.0/ecc-tdd.md): actual RED/GREEN checkpoints.
 
 [`dist/CopyClientConsole.lua`](dist/CopyClientConsole.lua) copies retained client
 logs locally without loading game modules. Roblox may have expired older entries.
