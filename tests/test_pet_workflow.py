@@ -129,3 +129,20 @@ computeHook = function() humanoid.Health = 0 end
 runtime:Action("HatchOnce")
 assert(#calls == 0 and runtime.Care.Counts.HatchRequests == 0)
 ''')
+
+    def test_moving_away_during_post_arrival_native_read_never_submits(self):
+        for action in ['GoldOnce', 'HatchOnce']:
+            with self.subTest(action=action):
+                self.run_case('''
+local reads=0
+facade.Save.Get=function()
+    reads+=1
+    if reads==2 then rootPart.Position=Vector3.new(0,0,0) end
+    return save
+end
+runtime:Action("PrepareCare")
+runtime:SetOption("EggName","Starter Egg")
+runtime:SetOption("ConversionSpecies","Cat")
+runtime:Action("''' + action + '''")
+assert(#calls==0,"post-arrival movement still sent a pet request")
+''')

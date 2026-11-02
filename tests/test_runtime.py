@@ -198,7 +198,8 @@ function navigation:Approach(variant, active)
     self.Calls += 1
     self.LastVariant = variant
     if navigationHook then navigationHook(variant, active) end
-    return not active or active()
+    if active and not active() then return false end
+    return true, function() return self.Proximity ~= false end
 end
 function navigation:Stop() self.Stops += 1 end
 function navigation:ApproachEgg(target, active)

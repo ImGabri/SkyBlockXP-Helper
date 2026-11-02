@@ -25,7 +25,8 @@ vectorMeta.__index = function(value,key)
     if key == "Magnitude" then return math.sqrt(value.X^2+value.Y^2+value.Z^2) end
 end
 local function instance(name,class,parent)
-    local object = {Name=name,ClassName=class,Parent=parent,Children={}}
+    local object = {Name=name,ClassName=class,Parent=parent,Children={},Attributes={}}
+    function object:GetAttribute(key) return self.Attributes[key] end
     function object:IsA(kind) return self.ClassName==kind or (kind=="BasePart" and self.ClassName=="Part") end
     function object:FindFirstChild(key)
         for _, item in ipairs(self.Children) do if item.Name==key then return item end end
@@ -55,6 +56,7 @@ local rainbowPad=instance("Pad","Part",rainbow)
 rainbowPad.Position=Vector3.new(80,0,0)
 local eggs=instance("Eggs","Folder",map)
 local egg=instance("Starter Egg","Model",eggs)
+egg.Attributes.ID="Starter Egg"
 local eggCenter=instance("Center","Part",egg)
 eggCenter.Position=Vector3.new(120,0,0)
 local character=instance("Character","Model",workspace)
@@ -132,6 +134,40 @@ assert(#moves==0 and pathCalls==0)
 root.Position=Vector3.new(35,0,0)
 assert(navigation:Approach("Gold"))
 assert(#moves==0 and pathCalls==0)
+''')
+
+    def test_arrival_guard_survives_cleanup_and_never_calls_active_recursively(self):
+        self.run_case('''
+local calls=0
+local reached, guard=navigation:Approach("Gold",function() calls+=1;return true end)
+assert(reached and type(guard)=="function","arrival guard missing")
+calls=0
+assert(guard() and calls==0,"arrival guard calls the operation token")
+root.Position=Vector3.new(0,0,0)
+assert(not guard(),"arrival guard accepted movement away")
+root.Position=Vector3.new(40,0,0)
+assert(guard())
+navigation:Stop()
+assert(not guard(),"Stop did not invalidate arrival guard")
+''')
+
+    def test_arrival_guard_rejects_changed_live_rig_or_target(self):
+        for change in ['goldPad.Parent=nil', 'goldPad.Position=Vector3.new(100,0,0)', 'humanoid.Health=0', 'root.Name="OldRoot";local replacement=instance("HumanoidRootPart","Part",character);replacement.Position=Vector3.new(40,0,0)']:
+            with self.subTest(change=change):
+                self.run_case('''
+local reached,guard=navigation:Approach("Gold")
+assert(reached and type(guard)=="function","arrival guard missing")
+''' + change + '''
+assert(not guard(),"arrival guard accepted a changed rig or target")
+''')
+
+    def test_egg_arrival_guard_rejects_reused_model_id(self):
+        self.run_case('''
+local reached,guard=navigation:ApproachEgg(egg)
+assert(reached and type(guard)=="function","egg arrival guard missing")
+assert(guard())
+egg.Attributes.ID="Different Egg"
+assert(not guard(),"reused egg model retained old arrival authority")
 ''')
 
     def test_walks_to_the_correct_loaded_machine_and_verifies_arrival(self):
