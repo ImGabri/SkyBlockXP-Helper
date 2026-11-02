@@ -15,20 +15,29 @@ local function samePlace() return game.PlaceId == Config.Target.PlaceId and game
 
 -- Structural diagnostics only: no balances, UIDs, pet details or arbitrary key values.
 -- The result shape is not permission to convert pets through an unverified schema.
-local function describeSaveShape(value)
+local function describeSaveShape(value, active)
+    if active and not active() then return nil end
     if type(value) ~= "table" then return "Save.Get result type=" .. typeof(value) .. "; Pets=unavailable" end
     local pieces = { "Save.Get result type=table" }
     local function describeField(parent, field)
+        if active and not active() then return nil end
         local ok, result = pcall(function() return parent[field] end)
+        if active and not active() then return nil end
         return if ok then typeof(result) else "read-error"
     end
     for _, field in ipairs({ "Pets", "Inventory", "Data", "Save" }) do
-        table.insert(pieces, field .. "=" .. describeField(value, field))
+        local shape = describeField(value, field)
+        if shape == nil then return nil end
+        table.insert(pieces, field .. "=" .. shape)
     end
     for _, field in ipairs({ "Inventory", "Data", "Save" }) do
+        if active and not active() then return nil end
         local ok, section = pcall(function() return value[field] end)
+        if active and not active() then return nil end
         if ok and type(section) == "table" then
-            table.insert(pieces, field .. ".Pets=" .. describeField(section, "Pets"))
+            local shape = describeField(section, "Pets")
+            if shape == nil then return nil end
+            table.insert(pieces, field .. ".Pets=" .. shape)
         end
     end
     return table.concat(pieces, "; ")
@@ -58,10 +67,10 @@ end
 
 function PetCare:Connect(active, mode)
     mode = if mode == "Direct" then "Direct" else "Facade"
-    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
+    self._mode = mode
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
@@ -170,37 +179,53 @@ function PetCare:InspectSave(active)
     if self:_occupied() then error("Another pet operation is still active; no overlapping save read.", 0) end
     local generation = self._generation
     local owner = coroutine.running()
+    local function current()
+        return not self._destroyed and self._generation == generation and samePlace() and (not active or active())
+    end
+    local getSave = self._api.getSave
     self._busy = owner
     self._phase = "Inspecting Save.Get layout (read-only)"
     self:_report()
-    local call = table.pack(pcall(self._api.getSave))
-    if self._busy == owner then self._busy = nil end
-    if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
-    local returns = math.max(0, call.n - 1)
-    self._saveCallReport = "returns=" .. tostring(returns)
-        .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
-    if debug and type(debug.info) == "function" then
-        local metaOk, args, variadic = pcall(debug.info, self._api.getSave, "a")
-        if metaOk then
-            self._saveCallReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic)
+    local ok, result = pcall(function()
+        local call = table.pack(pcall(getSave))
+        if not current() then return false end
+        local returns = math.max(0, call.n - 1)
+        local callReport = "returns=" .. tostring(returns)
+            .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
+        if debug and type(debug.info) == "function" then
+            local metaOk, args, variadic = pcall(debug.info, getSave, "a")
+            if not current() then return false end
+            if metaOk then callReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic) end
         end
-    end
-    if not call[1] then
-        self._saveReport = "Save.Get raised an error; no inventory values recorded"
+        if not call[1] then
+            self._saveCallReport = callReport
+            self._saveReport = "Save.Get raised an error; no inventory values recorded"
+            self:_report()
+            error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
+        end
+        local value = call[2]
+        local shape = describeSaveShape(value, current)
+        if shape == nil or not current() then return false end
+        local readable, pets = false, nil
+        if type(value) == "table" then
+            readable, pets = pcall(function() return value.Pets end)
+            if not current() then return false end
+        end
+        self._saveCallReport, self._saveReport = callReport, shape
+        self._phase = "Save.Get layout inspected (read-only)"
+        if not readable or type(pets) ~= "table" then
+            -- Module existence does not establish readiness for a pet mutation.
+            self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+            if type(value) ~= "table" then self.Supported.AutoHatch = false end
+            self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
+        end
         self:_report()
-        error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
-    end
-    local value = call[2]
-    self._saveReport = describeSaveShape(value)
-    self._phase = "Save.Get layout inspected (read-only)"
-    if type(value) ~= "table" or type(value.Pets) ~= "table" then
-        -- Module existence does not establish readiness for a pet mutation.
-        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
-        if type(value) ~= "table" then self.Supported.AutoHatch = false end
-        self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
-    end
-    self:_report()
-    return true
+        return true
+    end)
+    if self._busy == owner then self._busy = nil end
+    if not current() then return false end
+    if not ok then error(result, 0) end
+    return result
 end
 
 function PetCare:_run(key, active, work)
@@ -263,13 +288,17 @@ function PetCare:_hatchPlan(eggName, mode, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    self._saveReport = describeSaveShape(save)
+    local shape = describeSaveShape(save, current)
+    if shape == nil or not current() then return nil end
+    self._saveReport = shape
     self:_report()
     if type(save) ~= "table" then
         self.Supported.AutoHatch, self.Supported.AutoGold, self.Supported.AutoRainbow = false, false, false
     end
     if type(save) ~= "table" or not number(save[egg.currency]) then
-        error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
+        self.Reason = "Save.Get supplied no readable " .. egg.currency .. " balance (" .. shape .. "). No hatch request sent."
+        self:_report()
+        error(self.Reason, 0)
     end
     if save[egg.currency] < egg.cost * count then
         self._phase = "Waiting for hatch currency"
@@ -399,7 +428,9 @@ function PetCare:_conversionBatch(variant, selected, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    self._saveReport = describeSaveShape(save)
+    local shape = describeSaveShape(save, current)
+    if shape == nil or not current() then return nil end
+    self._saveReport = shape
     self:_report()
     if type(save) ~= "table" or type(save.Pets) ~= "table" then
         self.Supported.AutoGold, self.Supported.AutoRainbow = false, false

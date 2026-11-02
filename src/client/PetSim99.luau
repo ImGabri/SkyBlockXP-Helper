@@ -327,7 +327,8 @@ function PetSim99:InspectCoinModels()
     for _, item in ipairs(coins:GetChildren()) do
         if item:IsA("Model") then
             models += 1
-            local part = item:FindFirstChild("Coin") or item:FindFirstChild("POS")
+            local part = item:FindFirstChild("Coin")
+            if not part or not part:IsA("BasePart") then part = item:FindFirstChild("POS") end
             if part and part:IsA("BasePart") and vector(part.Position) then
                 markers += 1
                 local distance = if root then (root.Position - part.Position).Magnitude else nil
