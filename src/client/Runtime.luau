@@ -6,6 +6,7 @@ local Interface = require(script.Parent.Interface)
 local PetSim99 = require(script.Parent.PetSim99)
 local PetCare = require(script.Parent.PetCare)
 local MachineNavigation = require(script.Parent.MachineNavigation)
+local ClickGuard = require(script.Parent.ClickGuard)
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -139,8 +140,30 @@ function Runtime:StopHeavenChest()
     return true
 end
 
+function Runtime:InputContextAllowed()
+    if not self.Alive then return false, "Suite unloaded." end
+    if game.PlaceId ~= Config.Target.PlaceId or game.GameId ~= Config.Target.UniverseId then
+        return false, "Paused: enter the Classic Event destination before using world input."
+    end
+    if not self:LivingCharacter() then return false, "Paused: waiting for a living character." end
+    if self.Jobs:busy("care") then return false, "Paused: pet tools or travel are active." end
+    return true
+end
+
+function Runtime:CheckWorldInput()
+    local allowed, reason = self:InputContextAllowed()
+    if not allowed then return false, reason end
+    local ok, input, guiService = pcall(function()
+        return game:GetService("UserInputService"), game:GetService("GuiService")
+    end)
+    if not ok then return false, "Paused: native input and GUI state are unavailable." end
+    return ClickGuard.Check(self.Player, input, guiService, isrbxactive)
+end
+
 function Runtime:StepHeavenChest()
     if not self.Options.HeavenChestAssist then return end
+    local allowed, reason = self:CheckWorldInput()
+    if not allowed then self.State.ChestStatus = reason; self:Publish(); return end
     local character = self.Player.Character
     if not character or not character.Parent then return end
     if type(mouse1click) ~= "function" then
@@ -177,10 +200,8 @@ function Runtime:StepHeavenChest()
     if not usable(target) or target.Name ~= self.ChestAnchorName
         or (target.Parent and target.Parent.Name or "") ~= self.ChestAnchorParent
         or (target.Position - self.ChestAnchorPosition).Magnitude > 12 then return end
-    if type(isrbxactive) == "function" then
-        local ok, active = pcall(isrbxactive)
-        if not ok or not active then return end
-    end
+    allowed, reason = self:CheckWorldInput()
+    if not allowed then self.State.ChestStatus = reason; self:Publish(); return end
     local ok, result = pcall(mouse1click)
     if not ok then
         self.State.LastError = "Heaven chest click failed: " .. tostring(result)
@@ -403,6 +424,14 @@ end
 
 function Runtime:StepHeavenSweep()
     if not self.Options.HeavenIslandSweep then return end
+    local allowed, reason = self:CheckWorldInput()
+    if not allowed then
+        self.HeavenSweepPending = nil
+        self.HeavenSweepNextAt = os.clock() + 0.5
+        self.State.HeavenSweepStatus = reason
+        self:Publish()
+        return
+    end
     local now = os.clock()
     if now >= (self.HeavenScanNextAt or 0) then self:ScanHeavenTargets() end
     if now < (self.HeavenSweepNextAt or 0) then return end
@@ -440,7 +469,7 @@ function Runtime:StepHeavenSweep()
         local readyAt = self.HeavenSweepClicked[object] or 0
         if now < readyAt then return end
         -- Validate projected aim AFTER moving the cursor, not just the object's old coordinates.
-        -- This catches viewport / executor coordinate mismatches and UI overlays.
+        -- This catches world-target coordinate mismatches. Native GUI checks are separate.
         local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
         local hit = if mouseOk and mouse then mouse.Target else nil
         local matchesTarget = hit ~= nil
@@ -455,6 +484,8 @@ function Runtime:StepHeavenSweep()
             self:Publish()
             return
         end
+        allowed, reason = self:CheckWorldInput()
+        if not allowed then self.State.HeavenSweepStatus = reason; self:Publish(); return end
         local clicked, message = pcall(mouse1click)
         if not clicked then
             self.State.LastError = "Targeted click failed: " .. tostring(message)
@@ -557,6 +588,7 @@ function Runtime:FeatureResult(key, ok, result)
 end
 
 function Runtime:PrepareCare()
+    self.HeavenSweepPending = nil
     for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
     self.Jobs:cancel("care")
     self.Navigator:Stop()
@@ -585,6 +617,7 @@ function Runtime:LivingCharacter()
 end
 
 function Runtime:InspectSave()
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:InspectSave(activeJob)
@@ -600,6 +633,7 @@ function Runtime:InspectSave()
 end
 
 function Runtime:StartCare(key, manual)
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
     local character, humanoid, root = self:LivingCharacter()
@@ -664,6 +698,7 @@ function Runtime:StartCare(key, manual)
 end
 
 function Runtime:GoToMachine(variant, openMenu)
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local character, humanoid, root = self:LivingCharacter()
     if not character then return false, "Wait for a living character before traveling." end
@@ -694,6 +729,7 @@ function Runtime:GoToMachine(variant, openMenu)
 end
 
 function Runtime:GoToEgg()
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local character, humanoid, root = self:LivingCharacter()
     if not character then return false, "Wait for a living character before traveling." end
@@ -757,9 +793,16 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
-    self:StepHeavenSweep()
-    self:StepHeavenChest()
     self:StepCare()
+    local inputAllowed, inputReason = self:InputContextAllowed()
+    if inputAllowed then
+        self:StepHeavenSweep()
+        self:StepHeavenChest()
+    else
+        self.HeavenSweepPending = nil
+        if self.Options.HeavenIslandSweep then self.State.HeavenSweepStatus = inputReason end
+        if self.Options.HeavenChestAssist then self.State.ChestStatus = inputReason end
+    end
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
         or (self.MachineJourney and self.MachineJourney())) then
         self.Jobs:cancel("AutoFarm")
@@ -927,6 +970,9 @@ function Runtime:SetOption(key, value)
     if not self.Alive then return false, "Suite is unloaded." end
     local parsed, reason = Policy.option(key, value)
     if parsed == nil then return false, reason end
+    if parsed == true and (key == "HeavenIslandSweep" or key == "HeavenChestAssist") then
+        return false, "Use the explicit input-farm start/arm action before enabling mouse automation."
+    end
     if parsed == true and self.Adapter.Supported[key] == false then
         return false, self.Adapter.Reason
     end
@@ -940,9 +986,6 @@ function Runtime:SetOption(key, value)
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
-    if key == "HeavenIslandSweep" and parsed then
-        return false, "Use START Heaven Island autofarm; do not use the legacy network toggle."
-    end
     if key == "HeavenChestAssist" and not parsed then
         self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
         self.State.ChestStatus = "Stopped"
