@@ -159,12 +159,16 @@ function Runtime:StartCare(key, manual)
     local egg, mode, species = self.Options.EggName, self.Options.HatchMode, self.Options.ConversionSpecies
     local travel = if key == "AutoHatch" then self.Options.EggTravelMode == "Walk" else self.Options.MachineTravelMode == "Walk"
     local timeout = Config.RequestTimeout + (if travel then Config.TravelTimeout else 0)
+    local proximityLost = false
     local started = self.Jobs:start("care", timeout, function(activeJob)
         self.CareMutation = activeJob
+        local arrivalGuard
         local function current()
             if not self.Alive or not activeJob() or not (manual or self.Options[key]) then return false end
             local liveCharacter, liveHumanoid, liveRoot = self:LivingCharacter()
-            return liveCharacter == character and liveHumanoid == humanoid and liveRoot == root
+            if liveCharacter ~= character or liveHumanoid ~= humanoid or liveRoot ~= root then return false end
+            if arrivalGuard and not arrivalGuard() then proximityLost = true; return false end
+            return true
         end
         if key == "AutoHatch" then
             if not self.Care:CanHatch(egg, mode, current) or not current() then return 0 end
@@ -174,7 +178,11 @@ function Runtime:StartCare(key, manual)
                 self.MachineJourney = activeJob
                 self.Jobs:cancel("AutoFarm")
                 self:StopNavigation()
-                if not self.Navigator:ApproachEgg(target, current) or not current() then return 0 end
+                local reached, guard = self.Navigator:ApproachEgg(target, current)
+                if not reached or not current() then return 0 end
+                if type(guard) ~= "function" then error("Egg arrival could not be guarded; no purchase sent.", 0) end
+                arrivalGuard = guard
+                if not current() then return 0 end
                 local arrivedTarget = self.Care:GetEggTarget(egg, current)
                 if not current() then return 0 end
                 if arrivedTarget ~= target then error("Selected egg changed while approaching; no purchase sent.", 0) end
@@ -186,12 +194,15 @@ function Runtime:StartCare(key, manual)
         if travel then
             self.Jobs:cancel("AutoFarm")
             self:StopNavigation()
-            if not self.Navigator:Approach(variant, current) then return 0 end
+            local reached, guard = self.Navigator:Approach(variant, current)
+            if not reached or not current() then return 0 end
+            if type(guard) ~= "function" then error("Machine arrival could not be guarded; no conversion sent.", 0) end
+            arrivalGuard = guard
         end
         if not current() then return 0 end
         return self.Care:Convert(variant, species, current)
     end, function(ok, result)
-        self.State.CareStatus = self.Care.Reason
+        self.State.CareStatus = if proximityLost then "Target changed or left range — operation stopped" else self.Care.Reason
         if not ok then
             self.Navigator:Stop()
             self.Options[key] = false

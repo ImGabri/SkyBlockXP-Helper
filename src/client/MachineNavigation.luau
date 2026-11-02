@@ -80,9 +80,10 @@ function Navigation:ApproachEgg(model, active)
         error("The selected egg has no loaded Center part with a readable position.", 0)
     end
     local target = center.Position
+    local eggId = model:GetAttribute("ID")
     local name = "egg " .. model.Name
     return self:_walk(name, target, function()
-        return model:IsDescendantOf(workspace) and child(model, "Center") == center
+        return model:IsDescendantOf(workspace) and model:GetAttribute("ID") == eggId and child(model, "Center") == center
             and center.Parent == model and position(center.Position)
             and (center.Position - target).Magnitude <= 0.1
     end, active)
@@ -120,6 +121,16 @@ function Navigation:_walk(name, target, stillLoaded, active)
         if not position(root.Position) then error("Character position became unreadable while walking.", 0) end
         if os.clock() >= deadline then error("Walking to " .. name .. " timed out before verified arrival.", 0) end
         return true
+    end
+
+    -- Remains usable after walking releases its owner/state. It intentionally
+    -- does not call active(): the caller's token may include this guard.
+    local function arrivalGuard()
+        if self._generation ~= generation or self.Player.Character ~= character or not character.Parent
+            or root.Parent ~= character or humanoid.Parent ~= character
+            or child(character, "HumanoidRootPart") ~= root or character:FindFirstChildOfClass("Humanoid") ~= humanoid
+            or not finite(humanoid.Health) or humanoid.Health <= 0 or not position(root.Position) then return false end
+        return stillLoaded() and (root.Position - target).Magnitude <= ARRIVAL_DISTANCE
     end
 
     local ok, result = pcall(function()
@@ -170,7 +181,7 @@ function Navigation:_walk(name, target, stillLoaded, active)
     if self._state == state then self._state = nil end
     if self._owner == owner then self._owner = nil end
     if not ok then error(result, 0) end
-    return result
+    return result, if result == true then arrivalGuard else nil
 end
 
 return Navigation
