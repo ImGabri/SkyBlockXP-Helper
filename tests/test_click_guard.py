@@ -109,7 +109,7 @@ rejected(permitted,reason)
 ''')
 
     def test_hidden_or_disabled_ancestry_cannot_intercept_click(self):
-        for change in ['screen.Enabled=false', 'parent.Visible=false', 'parent.ClassName="CanvasGroup";parent.GroupTransparency=1']:
+        for change in ['screen.Enabled=false', 'parent.Visible=false']:
             with self.subTest(change=change):
                 self.run_case('''
 local parent=object("Frame",screen)
@@ -117,6 +117,31 @@ local hit=object("TextButton",parent)
 hits={hit}
 ''' + change + '''
 assert(Guard.Check(player,input,service,active)==true,"hidden ancestor blocked a clear view")
+''')
+
+    def test_transparent_render_group_still_blocks_interactive_descendants(self):
+        for kind in ["TextButton", "TextBox", "Frame"]:
+            with self.subTest(kind=kind):
+                self.run_case('''
+local group=object("CanvasGroup",screen)
+group.GroupTransparency=1
+local hit=object("''' + kind + '''",group)
+hit.Active=true
+hits={hit}
+rejected(Guard.Check(player,input,service,active))
+''')
+
+    def test_transparent_passive_group_does_not_hide_a_visible_outer_panel(self):
+        self.run_case('''
+local outer=object("Frame",screen)
+local group=object("CanvasGroup",outer)
+group.GroupTransparency=1
+local hit=object("Frame",group)
+hit.BackgroundTransparency=0
+hits={hit}
+assert(Guard.Check(player,input,service,active)==true,"render-hidden passive content blocked input")
+outer.BackgroundTransparency=0
+rejected(Guard.Check(player,input,service,active))
 ''')
 
     def test_fully_transparent_passive_wrappers_allow_world_click(self):
