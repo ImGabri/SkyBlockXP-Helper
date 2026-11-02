@@ -314,3 +314,35 @@ navigation modules against explicit game/UI boundaries. They reproduce moving
 away during a post-arrival save read, death during pathfinding, currency waiting
 and walking before hatch/gold/rainbow. These validate local contracts, not live
 Solara execution, real geometry, current egg data or server acceptance.
+
+## v0.12 — supplied paste and FlowAuth reference
+
+The user supplied a paste.sh link and then the same direct
+[FlowAuth launcher](https://flowauth.net/v1/loaders/11da2320015a5f91ed56d1612361ef0a.lua).
+The paste was fetched and decrypted offline using the fragment supplied in the
+conversation. Its entire body is that one-line loader. The fragment and opaque
+launch-ticket values are not reproduced in this repository.
+
+Static HTTP inspection fetched the public launcher and its versioned shared
+bootstrapper, without running either. The launcher declares `keyless=false`,
+accepts a credential, downloads/checks/compiles the runtime and sends launch/error
+telemetry. Individual launcher fetches vary because of embedded launch data.
+The 627,508-byte shared runtime has SHA256
+`8cb01d2dc57b8767d21e5e22139ffd72ee20dc0e30ce1401e15fb1df97b93cdd`,
+matching its public versioned URL. It is a virtualized/obfuscated Luau program.
+
+The readable stages expose no usable coin, egg, conversion, machine-range or
+menu implementation, nor proof of support for the observed Classic place. No
+third-party payload was executed, no authentication was bypassed and no hidden
+implementation was copied. The readable launcher alone does not establish the
+behavior or safety of the eventual gameplay payload. Readable source from its
+author or authorized in-game diagnostics would be needed for that comparison.
+Full static-inspection artifacts remain outside the project at
+`/workspace/.tools/psx-working-reference`.
+
+The concurrently published v0.11 branch adds local detected-target input instead
+of relying on the failed native coin route. The merged v0.12 build preserves it
+and adds focus/GUI/lifecycle coordination. The user's actual latest native
+Get Coins zero-value response and Save.Get nil response remain failed contracts;
+the combined build has not had live target acceptance. See the
+[release evidence](releases/0.12.0/ecc-tdd.md).

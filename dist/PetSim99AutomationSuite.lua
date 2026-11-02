@@ -3,6 +3,129 @@
 local __factories = {}
 
 do
+__factories["ClickGuard.luau"] = function(__require)
+--!nocheck
+-- Read native focus/cursor/GUI state immediately before injecting input.
+-- This helper never moves the mouse, clicks, loads game modules or caches a pass.
+local ClickGuard = {}
+
+local function finite(value)
+    return type(value) == "number" and value == value and math.abs(value) < math.huge
+end
+
+local function alpha(value)
+    return finite(value) and value >= 0 and value <= 1
+end
+
+local function call(object, name, ...)
+    local method = object and object[name]
+    if type(method) ~= "function" then return false end
+    return pcall(method, object, ...)
+end
+
+-- Empty chains are hidden. Nil plus a reason means the native data is ambiguous.
+local function visibleChain(hit, playerGui)
+    if typeof(hit) ~= "Instance" or not hit:IsA("GuiObject") then
+        return nil, "GUI hit query returned an unknown object."
+    end
+    local chain, node, renderHiddenThrough = {}, hit, 0
+    for _ = 1, 64 do
+        if node == playerGui then return chain, nil, renderHiddenThrough end
+        if typeof(node) ~= "Instance" then return nil, "GUI ancestry could not be verified." end
+        if node:IsA("GuiObject") then
+            if type(node.Visible) ~= "boolean" then return nil, "GUI visibility is unreadable." end
+            if not node.Visible then return {} end
+            if node:IsA("CanvasGroup") then
+                if not alpha(node.GroupTransparency) then return nil, "GUI group visibility is unreadable." end
+                -- Appearance does not disable input on buttons/active objects.
+                -- Ancestors above this group can still be visibly opaque.
+                if node.GroupTransparency == 1 then renderHiddenThrough = #chain + 1 end
+            end
+            table.insert(chain, node)
+        elseif node:IsA("LayerCollector") then
+            if type(node.Enabled) ~= "boolean" then return nil, "GUI enabled state is unreadable." end
+            if not node.Enabled then return {} end
+        end
+        node = node.Parent
+    end
+    return nil, "GUI ancestry exceeded the verification limit."
+end
+
+local function obstructs(node, renderHidden)
+    if node:IsA("GuiButton") or node:IsA("TextBox") then return true end
+    if type(node.Active) ~= "boolean" then return nil, "GUI interactivity is unreadable." end
+    if node.Active then return true end
+    if renderHidden then return false end
+    if not alpha(node.BackgroundTransparency) then return nil, "GUI opacity is unreadable." end
+    if node.BackgroundTransparency < 1 then return true end
+    if node:IsA("ImageLabel") then
+        if not alpha(node.ImageTransparency) then return nil, "GUI image opacity is unreadable." end
+        if node.ImageTransparency < 1 then
+            if type(node.Image) ~= "string" then return nil, "GUI image content is unreadable." end
+            if node.Image ~= "" then return true end
+        end
+    end
+    if node:IsA("TextLabel") then
+        if not alpha(node.TextTransparency) or not alpha(node.TextStrokeTransparency) then
+            return nil, "GUI text opacity is unreadable."
+        end
+        if node.TextTransparency < 1 or node.TextStrokeTransparency < 1 then
+            if type(node.Text) ~= "string" then return nil, "GUI text content is unreadable." end
+            if node.Text ~= "" then return true end
+        end
+    end
+    return false
+end
+
+local function check(player, input, guiService, isActive)
+    if type(isActive) ~= "function" then return false, "Roblox focus verification is unavailable (isrbxactive)." end
+    local focusOk, active = pcall(isActive)
+    if not focusOk or active ~= true then return false, "Paused: Roblox focus is not verified." end
+    local textOk, textBox = call(input, "GetFocusedTextBox")
+    if not textOk then return false, "Focused text input could not be checked." end
+    if textBox ~= nil then return false, "Paused: a text box has focus." end
+    local menu = guiService and guiService.MenuIsOpen
+    if type(menu) ~= "boolean" then return false, "Roblox menu state could not be checked." end
+    if menu then return false, "Paused: the Roblox menu is open." end
+    local cursorOk, cursor = call(input, "GetMouseLocation")
+    if not cursorOk or not cursor or not finite(cursor.X) or not finite(cursor.Y) then
+        return false, "Actual mouse position could not be checked."
+    end
+    local guiOk, playerGui = call(player, "FindFirstChild", "PlayerGui")
+    if not guiOk or typeof(playerGui) ~= "Instance" or not playerGui:IsA("PlayerGui") then
+        return false, "PlayerGui is unavailable for native hit testing."
+    end
+    local hitsOk, hits = call(playerGui, "GetGuiObjectsAtPosition", cursor.X, cursor.Y)
+    if not hitsOk or type(hits) ~= "table" then return false, "Native GUI hit testing is unavailable." end
+    local size = #hits
+    for key in pairs(hits) do
+        if type(key) ~= "number" or key < 1 or key % 1 ~= 0 or key > size then
+            return false, "Native GUI hit query returned an unsupported list."
+        end
+    end
+    for index = 1, size do
+        local chain, reason, renderHiddenThrough = visibleChain(hits[index], playerGui)
+        if not chain then return false, reason end
+        for depth, node in ipairs(chain) do
+            local covered, issue = obstructs(node, depth <= (renderHiddenThrough or 0))
+            if issue then return false, issue end
+            if covered then return false, "Paused: visible or interactive GUI covers the cursor." end
+        end
+    end
+    return true, nil
+end
+
+function ClickGuard.Check(player, input, guiService, isActive)
+    local ok, allowed, reason = pcall(check, player, input, guiService, isActive)
+    if not ok then return false, "Native input state could not be verified; no click sent." end
+    return allowed, reason
+end
+
+return ClickGuard
+end
+end
+
+do
 __factories["Config.luau"] = function(__require)
 --!strict
 
@@ -148,6 +271,7 @@ local defaults = {
     AutoCollectLootbags = false,
     WalkToTarget = false,
     FarmMode = "Nearest",
+    ModulePathMode = "Direct",
     Area = "All",
     NameFilter = "",
     Radius = 250,
@@ -585,6 +709,13 @@ function Interface.mount(spec)
         end)
     end
 
+    rowOrder += 1
+    label(pages.Farm, {
+        Size = UDim2.new(1, -10, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        TextSize = 11, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = colors.muted, LayoutOrder = rowOrder,
+        Text = "B starts/stops detected-target farming. Hide this panel with Right Ctrl and keep menus closed. Input pauses while pet tools run, while dead, or when focus/GUI cannot be checked. Priority, area and name below apply only to the legacy farm; target input uses nearby detected objects.",
+    })
     actionButton("Farm", "START Heaven Island AutoFarm [B]", "StartHeavenSweep")
     actionButton("Farm", "STOP Heaven Island AutoFarm [B]", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
@@ -1074,20 +1205,29 @@ local function samePlace() return game.PlaceId == Config.Target.PlaceId and game
 
 -- Structural diagnostics only: no balances, UIDs, pet details or arbitrary key values.
 -- The result shape is not permission to convert pets through an unverified schema.
-local function describeSaveShape(value)
+local function describeSaveShape(value, active)
+    if active and not active() then return nil end
     if type(value) ~= "table" then return "Save.Get result type=" .. typeof(value) .. "; Pets=unavailable" end
     local pieces = { "Save.Get result type=table" }
     local function describeField(parent, field)
+        if active and not active() then return nil end
         local ok, result = pcall(function() return parent[field] end)
+        if active and not active() then return nil end
         return if ok then typeof(result) else "read-error"
     end
     for _, field in ipairs({ "Pets", "Inventory", "Data", "Save" }) do
-        table.insert(pieces, field .. "=" .. describeField(value, field))
+        local shape = describeField(value, field)
+        if shape == nil then return nil end
+        table.insert(pieces, field .. "=" .. shape)
     end
     for _, field in ipairs({ "Inventory", "Data", "Save" }) do
+        if active and not active() then return nil end
         local ok, section = pcall(function() return value[field] end)
+        if active and not active() then return nil end
         if ok and type(section) == "table" then
-            table.insert(pieces, field .. ".Pets=" .. describeField(section, "Pets"))
+            local shape = describeField(section, "Pets")
+            if shape == nil then return nil end
+            table.insert(pieces, field .. ".Pets=" .. shape)
         end
     end
     return table.concat(pieces, "; ")
@@ -1117,10 +1257,10 @@ end
 
 function PetCare:Connect(active, mode)
     mode = if mode == "Direct" then "Direct" else "Facade"
-    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
+    self._mode = mode
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
@@ -1229,37 +1369,53 @@ function PetCare:InspectSave(active)
     if self:_occupied() then error("Another pet operation is still active; no overlapping save read.", 0) end
     local generation = self._generation
     local owner = coroutine.running()
+    local function current()
+        return not self._destroyed and self._generation == generation and samePlace() and (not active or active())
+    end
+    local getSave = self._api.getSave
     self._busy = owner
     self._phase = "Inspecting Save.Get layout (read-only)"
     self:_report()
-    local call = table.pack(pcall(self._api.getSave))
-    if self._busy == owner then self._busy = nil end
-    if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
-    local returns = math.max(0, call.n - 1)
-    self._saveCallReport = "returns=" .. tostring(returns)
-        .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
-    if debug and type(debug.info) == "function" then
-        local metaOk, args, variadic = pcall(debug.info, self._api.getSave, "a")
-        if metaOk then
-            self._saveCallReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic)
+    local ok, result = pcall(function()
+        local call = table.pack(pcall(getSave))
+        if not current() then return false end
+        local returns = math.max(0, call.n - 1)
+        local callReport = "returns=" .. tostring(returns)
+            .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
+        if debug and type(debug.info) == "function" then
+            local metaOk, args, variadic = pcall(debug.info, getSave, "a")
+            if not current() then return false end
+            if metaOk then callReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic) end
         end
-    end
-    if not call[1] then
-        self._saveReport = "Save.Get raised an error; no inventory values recorded"
+        if not call[1] then
+            self._saveCallReport = callReport
+            self._saveReport = "Save.Get raised an error; no inventory values recorded"
+            self:_report()
+            error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
+        end
+        local value = call[2]
+        local shape = describeSaveShape(value, current)
+        if shape == nil or not current() then return false end
+        local readable, pets = false, nil
+        if type(value) == "table" then
+            readable, pets = pcall(function() return value.Pets end)
+            if not current() then return false end
+        end
+        self._saveCallReport, self._saveReport = callReport, shape
+        self._phase = "Save.Get layout inspected (read-only)"
+        if not readable or type(pets) ~= "table" then
+            -- Module existence does not establish readiness for a pet mutation.
+            self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+            if type(value) ~= "table" then self.Supported.AutoHatch = false end
+            self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
+        end
         self:_report()
-        error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
-    end
-    local value = call[2]
-    self._saveReport = describeSaveShape(value)
-    self._phase = "Save.Get layout inspected (read-only)"
-    if type(value) ~= "table" or type(value.Pets) ~= "table" then
-        -- Module existence does not establish readiness for a pet mutation.
-        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
-        if type(value) ~= "table" then self.Supported.AutoHatch = false end
-        self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
-    end
-    self:_report()
-    return true
+        return true
+    end)
+    if self._busy == owner then self._busy = nil end
+    if not current() then return false end
+    if not ok then error(result, 0) end
+    return result
 end
 
 function PetCare:_run(key, active, work)
@@ -1322,13 +1478,17 @@ function PetCare:_hatchPlan(eggName, mode, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    self._saveReport = describeSaveShape(save)
+    local shape = describeSaveShape(save, current)
+    if shape == nil or not current() then return nil end
+    self._saveReport = shape
     self:_report()
     if type(save) ~= "table" then
         self.Supported.AutoHatch, self.Supported.AutoGold, self.Supported.AutoRainbow = false, false, false
     end
     if type(save) ~= "table" or not number(save[egg.currency]) then
-        error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
+        self.Reason = "Save.Get supplied no readable " .. egg.currency .. " balance (" .. shape .. "). No hatch request sent."
+        self:_report()
+        error(self.Reason, 0)
     end
     if save[egg.currency] < egg.cost * count then
         self._phase = "Waiting for hatch currency"
@@ -1458,7 +1618,9 @@ function PetCare:_conversionBatch(variant, selected, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    self._saveReport = describeSaveShape(save)
+    local shape = describeSaveShape(save, current)
+    if shape == nil or not current() then return nil end
+    self._saveReport = shape
     self:_report()
     if type(save) ~= "table" or type(save.Pets) ~= "table" then
         self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
@@ -1895,7 +2057,8 @@ function PetSim99:InspectCoinModels()
     for _, item in ipairs(coins:GetChildren()) do
         if item:IsA("Model") then
             models += 1
-            local part = item:FindFirstChild("Coin") or item:FindFirstChild("POS")
+            local part = item:FindFirstChild("Coin")
+            if not part or not part:IsA("BasePart") then part = item:FindFirstChild("POS") end
             if part and part:IsA("BasePart") and vector(part.Position) then
                 markers += 1
                 local distance = if root then (root.Position - part.Position).Magnitude else nil
@@ -2320,6 +2483,7 @@ local Interface = __require("Interface.luau")
 local PetSim99 = __require("PetSim99.luau")
 local PetCare = __require("PetCare.luau")
 local MachineNavigation = __require("MachineNavigation.luau")
+local ClickGuard = __require("ClickGuard.luau")
 
 local Lighting = game:GetService("Lighting")
 local HttpService = game:GetService("HttpService")
@@ -2453,8 +2617,30 @@ function Runtime:StopHeavenChest()
     return true
 end
 
+function Runtime:InputContextAllowed()
+    if not self.Alive then return false, "Suite unloaded." end
+    if game.PlaceId ~= Config.Target.PlaceId or game.GameId ~= Config.Target.UniverseId then
+        return false, "Paused: enter the Classic Event destination before using world input."
+    end
+    if not self:LivingCharacter() then return false, "Paused: waiting for a living character." end
+    if self.Jobs:busy("care") then return false, "Paused: pet tools or travel are active." end
+    return true
+end
+
+function Runtime:CheckWorldInput()
+    local allowed, reason = self:InputContextAllowed()
+    if not allowed then return false, reason end
+    local ok, input, guiService = pcall(function()
+        return game:GetService("UserInputService"), game:GetService("GuiService")
+    end)
+    if not ok then return false, "Paused: native input and GUI state are unavailable." end
+    return ClickGuard.Check(self.Player, input, guiService, isrbxactive)
+end
+
 function Runtime:StepHeavenChest()
     if not self.Options.HeavenChestAssist then return end
+    local allowed, reason = self:CheckWorldInput()
+    if not allowed then self.State.ChestStatus = reason; self:Publish(); return end
     local character = self.Player.Character
     if not character or not character.Parent then return end
     if type(mouse1click) ~= "function" then
@@ -2491,10 +2677,8 @@ function Runtime:StepHeavenChest()
     if not usable(target) or target.Name ~= self.ChestAnchorName
         or (target.Parent and target.Parent.Name or "") ~= self.ChestAnchorParent
         or (target.Position - self.ChestAnchorPosition).Magnitude > 12 then return end
-    if type(isrbxactive) == "function" then
-        local ok, active = pcall(isrbxactive)
-        if not ok or not active then return end
-    end
+    allowed, reason = self:CheckWorldInput()
+    if not allowed then self.State.ChestStatus = reason; self:Publish(); return end
     local ok, result = pcall(mouse1click)
     if not ok then
         self.State.LastError = "Heaven chest click failed: " .. tostring(result)
@@ -2717,6 +2901,14 @@ end
 
 function Runtime:StepHeavenSweep()
     if not self.Options.HeavenIslandSweep then return end
+    local allowed, reason = self:CheckWorldInput()
+    if not allowed then
+        self.HeavenSweepPending = nil
+        self.HeavenSweepNextAt = os.clock() + 0.5
+        self.State.HeavenSweepStatus = reason
+        self:Publish()
+        return
+    end
     local now = os.clock()
     if now >= (self.HeavenScanNextAt or 0) then self:ScanHeavenTargets() end
     if now < (self.HeavenSweepNextAt or 0) then return end
@@ -2754,7 +2946,7 @@ function Runtime:StepHeavenSweep()
         local readyAt = self.HeavenSweepClicked[object] or 0
         if now < readyAt then return end
         -- Validate projected aim AFTER moving the cursor, not just the object's old coordinates.
-        -- This catches viewport / executor coordinate mismatches and UI overlays.
+        -- This catches world-target coordinate mismatches. Native GUI checks are separate.
         local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
         local hit = if mouseOk and mouse then mouse.Target else nil
         local matchesTarget = hit ~= nil
@@ -2769,6 +2961,8 @@ function Runtime:StepHeavenSweep()
             self:Publish()
             return
         end
+        allowed, reason = self:CheckWorldInput()
+        if not allowed then self.State.HeavenSweepStatus = reason; self:Publish(); return end
         local clicked, message = pcall(mouse1click)
         if not clicked then
             self.State.LastError = "Targeted click failed: " .. tostring(message)
@@ -2871,6 +3065,7 @@ function Runtime:FeatureResult(key, ok, result)
 end
 
 function Runtime:PrepareCare()
+    self.HeavenSweepPending = nil
     for _, key in ipairs({ "AutoHatch", "AutoGold", "AutoRainbow" }) do self.Options[key] = false end
     self.Jobs:cancel("care")
     self.Navigator:Stop()
@@ -2899,6 +3094,7 @@ function Runtime:LivingCharacter()
 end
 
 function Runtime:InspectSave()
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
         return self.Care:InspectSave(activeJob)
@@ -2914,6 +3110,7 @@ function Runtime:InspectSave()
 end
 
 function Runtime:StartCare(key, manual)
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     if not self.Care.Supported[key] then return false, self.Care.Reason end
     local character, humanoid, root = self:LivingCharacter()
@@ -2978,6 +3175,7 @@ function Runtime:StartCare(key, manual)
 end
 
 function Runtime:GoToMachine(variant, openMenu)
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local character, humanoid, root = self:LivingCharacter()
     if not character then return false, "Wait for a living character before traveling." end
@@ -3008,6 +3206,7 @@ function Runtime:GoToMachine(variant, openMenu)
 end
 
 function Runtime:GoToEgg()
+    self.HeavenSweepPending = nil
     if not self.Alive then return false, "Suite unloaded." end
     local character, humanoid, root = self:LivingCharacter()
     if not character then return false, "Wait for a living character before traveling." end
@@ -3071,9 +3270,16 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
-    self:StepHeavenSweep()
-    self:StepHeavenChest()
     self:StepCare()
+    local inputAllowed, inputReason = self:InputContextAllowed()
+    if inputAllowed then
+        self:StepHeavenSweep()
+        self:StepHeavenChest()
+    else
+        self.HeavenSweepPending = nil
+        if self.Options.HeavenIslandSweep then self.State.HeavenSweepStatus = inputReason end
+        if self.Options.HeavenChestAssist then self.State.ChestStatus = inputReason end
+    end
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
         or (self.MachineJourney and self.MachineJourney())) then
         self.Jobs:cancel("AutoFarm")
@@ -3241,6 +3447,9 @@ function Runtime:SetOption(key, value)
     if not self.Alive then return false, "Suite is unloaded." end
     local parsed, reason = Policy.option(key, value)
     if parsed == nil then return false, reason end
+    if parsed == true and (key == "HeavenIslandSweep" or key == "HeavenChestAssist") then
+        return false, "Use the explicit input-farm start/arm action before enabling mouse automation."
+    end
     if parsed == true and self.Adapter.Supported[key] == false then
         return false, self.Adapter.Reason
     end
@@ -3254,9 +3463,6 @@ function Runtime:SetOption(key, value)
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
-    if key == "HeavenIslandSweep" and parsed then
-        return false, "Use START Heaven Island autofarm; do not use the legacy network toggle."
-    end
     if key == "HeavenChestAssist" and not parsed then
         self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
         self.State.ChestStatus = "Stopped"

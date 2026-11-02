@@ -20,6 +20,7 @@ local defaults = {
     AutoCollectLootbags = false,
     WalkToTarget = false,
     FarmMode = "Nearest",
+    ModulePathMode = "Direct",
     Area = "All",
     NameFilter = "",
     Radius = 250,
@@ -457,6 +458,13 @@ function Interface.mount(spec)
         end)
     end
 
+    rowOrder += 1
+    label(pages.Farm, {
+        Size = UDim2.new(1, -10, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+        TextSize = 11, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top,
+        TextColor3 = colors.muted, LayoutOrder = rowOrder,
+        Text = "B starts/stops detected-target farming. Hide this panel with Right Ctrl and keep menus closed. Input pauses while pet tools run, while dead, or when focus/GUI cannot be checked. Priority, area and name below apply only to the legacy farm; target input uses nearby detected objects.",
+    })
     actionButton("Farm", "START Heaven Island AutoFarm [B]", "StartHeavenSweep")
     actionButton("Farm", "STOP Heaven Island AutoFarm [B]", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
