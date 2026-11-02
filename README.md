@@ -1,6 +1,6 @@
 # Pet Sim 99 (Pet Sim X) Automation suite
 
-Version **0.8.0**, targeting the PSX Classic Event inside Pet Simulator99:
+Version **0.12.0**, targeting the PSX Classic Event inside Pet Simulator99:
 place `85920622393590`, universe `3317771874`.
 
 This development build includes farming, pet tools, native-menu shortcuts and
@@ -19,11 +19,137 @@ or load the published main-branch build:
 loadstring(game:HttpGet("https://raw.githubusercontent.com/ImGabri/SkyBlockXP-Helper/main/dist/PetSim99AutomationSuite.lua"))()
 ```
 
-Confirm the title shows v0.8.0. Startup is passive and all automation starts off.
+Confirm the title shows v0.12.0. Startup is passive and all automation starts off.
 Right Control hides the panel; Stop All disables automation; Unload restores
 local movement, lighting and menu states owned by the suite.
 
-## Eggs, gold and rainbow
+## When the public Library facade hangs
+
+If the diagnostic report stops at `Loading ReplicatedStorage.Library ModuleScript`,
+the place may still be correct. Do **not** increase the timeout or repeatedly
+run the hanging native call. Rejoin the Classic Event in a fresh client, then
+use the default **Farm → Module path → Direct** for any manual compatibility check.
+For pet tools choose Direct the same way before clicking **Load pet tools**.
+Direct mode tries the existing `Library.Client.Network`,
+`Library.Client.PetCmds`, `Library.Client.Save`, and `Library.Directory`
+ModuleScripts individually and reports the exact module that stalls.
+It does not fall back automatically from a hung facade or guess remotes.
+Neither module access method is guaranteed to work in the live client.
+The original **Facade** path remains available for reproducibility. To
+switch modes after a successful load, rejoin first.
+
+## v0.7.3: proven module loading, unsupported legacy Get Coins response
+
+Live user diagnostics now confirm that Direct mode loads Network and PetCmds
+successfully, but Network.Invoke("Get Coins") returns zero values. An earlier
+in-game console showed a caller-script assertion for this legacy command.
+There is no verified game contract for obtaining a coin dictionary through the
+current event. **The suite does not fabricate a response or send repeated guesses
+to unnamed RemoteEvents.** AutoFarm stays disabled after the failed compatibility
+check. The Farm tab now includes **Inspect visible coin models (no network)**:
+it reports locally loaded model/position-marker counts and up to 12 examples,
+without requiring modules or contacting the server. This is diagnostic only,
+not a replacement coin protocol.
+
+Pet tools are **independent of Get Coins**. With Direct selected, try **Pets →
+Load pet tools** separately and copy diagnostics; supported API loading,
+hatching, and conversions must each be validated in-game before trusting them.
+
+## v0.7.4: missing inventory save diagnostics
+
+The client's confirmed Direct-module load passes, but the native `Get Coins`
+call returns no data and the inspected `__THINGS.Coins` folder held zero models.
+This is not evidence of a working farm protocol; AutoFarm stays blocked. Move
+normally to an event coin area and inspect again without repeating the rejected
+network probe.
+
+Pet tools do load, but a live AutoGold attempt stopped before mutation because
+`Save.Get()` did not provide a `Pets` table. Use **Pets → Inspect save layout
+(read-only)** after **Load pet tools**. It calls `Save.Get` once and reports only
+top-level types (`Pets`, `Inventory`, `Data`, `Save`) and the type of
+nested `Pets` fields when present. It does **not** print inventory, UIDs,
+balances or pet records; it does not send any game mutation request. This
+diagnostic does not assume that nested data is safe for conversion. Conversion
+will remain unavailable until the actual save contract can be validated.
+
+## v0.7.5: exact nil-save result and preflight gating
+
+The confirmed v0.7.4 live result showed `Save.Get` returning nil, rather
+than an inventory table or an unexpected table shape. The **Inspect save layout**
+button now reports the number and types of return values and callable argument
+metadata (without dumping inventory details). A nil or invalid save automatically
+disables pet conversion buttons for the session; a missing save table also
+disables hatching because the currency balance cannot be verified. Reload pet
+tools in a fresh session after the game save becomes available. This is a
+defensive readiness check, not a server workaround.
+
+**Run compatibility check** now refuses to invoke the already-failing
+`Get Coins` command when no coin Models are present in the local `__THINGS.Coins`
+folder. It does not interpret non-model children as coins. Debug listings
+combine repeated names (e.g., identical RemoteEvent entries) to make reports
+shorter. The previously seen `Get Coins` zero-value response remains
+unsupported and will not be guessed or replaced with unverified data.
+
+## v0.8.0: Heaven Island chest cursor assist
+
+The current PSX Classic Event does not return a coin dictionary from the legacy
+`Get Coins` call, and the user's Heaven Island local coin-model inspection was
+empty. This version adds a separate **Arm Heaven chest: aim within 3 seconds**
+button under Farm. It works independently of the blocked legacy AutoFarm and
+never loads pet tools, calls Save.Get or sends network remotes.
+
+1. Stand in Heaven Island, equip pets normally, and verify clicking the chest
+   manually sends them to attack.
+2. Scroll down inside Farm. The **HEAVEN: Aim at chest, arm within 3 seconds** button is near the bottom, directly above **Stop Heaven chest assist** and **STOP ALL**. The earlier **Legacy Get Coins check (NOT Heaven assist)** is a separate unsupported experimental probe. Click **Arm Heaven chest**. Within 3 seconds move the mouse cursor to the
+   actual chest (not a GUI overlay), and leave the camera/cursor stationary.
+3. The suite sends one `mouse1click()` input at that position. It waits until
+   the targeted part leaves the Workspace, then clicks one matching replacement
+   within 12 studs of the original part. This avoids click-spamming pets off
+   a still-live chest.
+4. **Stop Heaven chest assist** or **STOP ALL** immediately disables it. Closing
+   Roblox or switching areas also requires re-arming.
+
+This is a limited cursor assist **not verified automatic farming**:
+the input function must be supported by the executor, the chest must expose a
+clickable BasePart, and chest destruction must actually replace/remove it.
+If the chest reuses the same instance or clicking doesn't select it, the helper
+will not auto-retarget. It does not farm every breakable on Heaven Island or
+confirm any reward. It does not bypass game limits.
+
+## v0.11.0: B toggle, cursor verification and ongoing target retries
+
+On startup, the suite performs a *local-only*, passive scan of replicated
+Workspace objects. It looks for nearby individually named or tagged **vaults,
+safes, gifts, presents, small chests, coins, coin piles and crates**, including
+models in `__THINGS.Coins` if that folder is populated. This does **not**
+load any game modules, invoke game remotes or use Save.Get. The target count
+and category breakdown appear on Status; click **SCAN small breakables NOW**
+to refresh on demand. A running farm refreshes the scan every seven seconds.
+
+In Heaven Island (not Heaven's Gate), equip pets, close the Teleport menu,
+face the small breakables, then press **B** (or click **START Heaven Island
+AutoFarm [B]**). Press **B** again to stop. Typing into a text box will not
+activate the hotkey. The script only moves the cursor to a candidate with a visible
+world-to-screen position in the left gameplay view and clicks only when `Player:GetMouse().Target` confirms that the cursor
+actually points to the selected world object. It retries each object on a
+bounded cooldown instead of permanently excluding the same instance. Cursor
+mismatches are counted in Status and never produce clicks. The current
+input mode needs Roblox to be focused and both mouse input functions to
+work; it never clicks a fixed screen pattern. Objects containing
+known giant/Angel/Heaven's Gate chest names, large models, pets and effects
+are excluded. **B**, **STOP Heaven Island AutoFarm**, or **STOP ALL** disables it.
+
+This is a best-effort input-only targeting system, **not proven game-side
+farming**. Generic/unreplicated breakables or decorative objects with
+breakable-like names cannot reliably be distinguished from actual clickable
+breakables without a verified game API. The scanner intentionally makes
+**zero clicks** if it detects no eligible named/tagged targets, rather than
+guessing coordinates. A detected object or input click does not confirm
+pets attacked it or rewards were collected. The executor must support both
+`mousemoveabs` and `mouse1click`; the failing Get Coins command and pet
+tools are not required.
+
+## Eggs, gold and rainbow## Eggs, gold and rainbow
 
 1. In **Pets**, click **Load pet tools**. This loads the public Library APIs
    independently of the coin compatibility check; it does not send a remote probe.

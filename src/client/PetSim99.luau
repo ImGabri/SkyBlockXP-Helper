@@ -23,16 +23,21 @@ end
 
 local function childSummary(parent, limit)
     if not parent then return "not present" end
-    local names = {}
+    local counts, labels, total = {}, {}, 0
     for _, child in ipairs(parent:GetChildren()) do
-        table.insert(names, child.Name .. " (" .. child.ClassName .. ")")
+        local name = child.Name .. " (" .. child.ClassName .. ")"
+        if counts[name] == nil then table.insert(labels, name); counts[name] = 0 end
+        counts[name] += 1
+        total += 1
     end
-    table.sort(names)
-    local total = #names
-    while #names > limit do table.remove(names) end
-    local result = table.concat(names, ", ")
-    if total > limit then result ..= string.format(" ... (%d more)", total - limit) end
-    return if result == "" then "empty" else result
+    table.sort(labels)
+    local summary = {}
+    for index, name in ipairs(labels) do
+        if index > limit then break end
+        table.insert(summary, name .. (if counts[name] > 1 then " x" .. counts[name] else ""))
+    end
+    if #labels > limit then table.insert(summary, string.format("... (%d other distinct labels)", #labels - limit)) end
+    return if total == 0 then "empty" else string.format("%d children: %s", total, table.concat(summary, ", "))
 end
 
 local function selectLoader()
@@ -110,12 +115,14 @@ end
 function PetSim99:_report()
     self.Report = "Probe stage: " .. tostring(self._phase or "not started") .. "\n" .. (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nModule path mode: " .. (self._mode or "Facade")
         .. "\nModule loader: " .. (self._loaderName or "not selected")
         .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
         .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
         .. "\nPetCmds exports: " .. (self._petExports or "not loaded")
         .. string.format("\nRequests only: %d pet farm dispatches; %d orb IDs; %d lootbag IDs. No collection/break confirmation is inferred.",
             self._counts.FarmDispatches, self._counts.OrbIds, self._counts.LootbagIds)
+        .. "\n" .. (self._localCoinReport or "Local coin inspection: not run")
 end
 
 function PetSim99:_block(message)
@@ -174,7 +181,7 @@ function PetSim99:_readSnapshot(probe, active)
     end
     local root = self:_root()
     if returned.n == 0 then
-        error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
+        error("Get Coins returned no values (returns=0; types=none). The legacy command supplied no coin dictionary even though the modules loaded. AutoFarm remains disabled; use Inspect visible coin models for a read-only check, not repeated network probes.", 0)
     end
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
@@ -269,10 +276,16 @@ function PetSim99:Inspect()
     elseif library:IsA("Folder") and not client then
         table.insert(issues, "Legacy Library.Client folder is missing.")
     end
+    local modelCount = 0
     if not coins or not coins:IsA("Folder") then
         table.insert(issues, "No loaded __THINGS.Coins folder.")
-    elseif #coins:GetChildren() == 0 then
-        table.insert(issues, "No coin models are loaded nearby.")
+    else
+        for _, item in ipairs(coins:GetChildren()) do
+            if item:IsA("Model") then modelCount += 1 end
+        end
+        if modelCount == 0 then
+            table.insert(issues, "No loaded coin models; move normally into an event breakable area before any compatibility request.")
+        end
     end
     if not root or not root:IsA("BasePart") then
         table.insert(issues, "Character HumanoidRootPart is unavailable.")
@@ -284,7 +297,7 @@ function PetSim99:Inspect()
         "Library: " .. (if library then library.ClassName else "missing"),
         "Library.Client: " .. childSummary(client, 50),
         "__THINGS: " .. childSummary(things, 40),
-        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Coin models: " .. (if coins then tostring(modelCount) else "missing"),
         "Character root: " .. (if root then "present" else "missing"),
         "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
     }, "\n")
@@ -295,8 +308,57 @@ function PetSim99:Inspect()
         else table.concat(issues, "; ")
 end
 
-function PetSim99:Connect(active)
+-- Read-only client view. This never invokes a game module or sends remote requests.
+-- Coin models establish visible geometry, not server health, ownership or pet assignments.
+function PetSim99:InspectCoinModels()
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    if not coins or not coins:IsA("Folder") then
+        self._localCoinReport = "Local coin inspection: __THINGS.Coins folder unavailable."
+        self:_report()
+        return false, self._localCoinReport
+    end
+    local root
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local candidate = character and character:FindFirstChild("HumanoidRootPart")
+    if candidate and candidate:IsA("BasePart") and vector(candidate.Position) then root = candidate end
+    local models, markers, samples = 0, 0, {}
+    for _, item in ipairs(coins:GetChildren()) do
+        if item:IsA("Model") then
+            models += 1
+            local part = item:FindFirstChild("Coin") or item:FindFirstChild("POS")
+            if part and part:IsA("BasePart") and vector(part.Position) then
+                markers += 1
+                local distance = if root then (root.Position - part.Position).Magnitude else nil
+                table.insert(samples, { name = item.Name, marker = part.Name, distance = distance })
+            end
+        end
+    end
+    table.sort(samples, function(a, b)
+        if a.distance and b.distance and a.distance ~= b.distance then
+            return a.distance < b.distance
+        end
+        return tostring(a.name) < tostring(b.name)
+    end)
+    local rows = {}
+    for i = 1, math.min(#samples, 12) do
+        local item = samples[i]
+        table.insert(rows, tostring(item.name) .. " [" .. item.marker .. "]"
+            .. (if item.distance then string.format(" %.1f studs", item.distance) else " (no character root)"))
+    end
+    self._localCoinReport = string.format(
+        "Local coin inspection (read-only): loaded models=%d, valid position markers=%d, root=%s. No server metadata or farming compatibility inferred.\nSamples: %s",
+        models, markers, if root then "present" else "missing",
+        if #rows > 0 then table.concat(rows, ", ") else "none")
+    self:_report()
+    return true, self._localCoinReport
+end
+
+function PetSim99:Connect(active, mode)
     if active and not active() then return self end
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     self._generation += 1
     local generation = self._generation
     local function current()
@@ -345,8 +407,8 @@ function PetSim99:Connect(active)
         if not current() then return end
         self._moduleLoader, self._loaderName = loader, loaderName
         local network, petCmds, world, networkPath
-        if library:IsA("ModuleScript") then
-            -- Use the documented public library rather than bypassing its facade.
+        if library:IsA("ModuleScript") and mode == "Facade" then
+            -- The documented facade is an explicit mode; do not retry an unresolved call through another path.
             self._networkProvider = "ReplicatedStorage.Library"
             networkPath = "ReplicatedStorage.Library.Network"
             self._phase = "Loading ReplicatedStorage.Library ModuleScript"
@@ -364,7 +426,7 @@ function PetSim99:Connect(active)
                 error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
             end
         else
-            -- Compatibility for legacy folder-only layouts; current event has a facade.
+            -- Explicit Direct mode, or legacy folder-only layout. Never a timeout fallback.
             if not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
             local networkModule = client:FindFirstChild("Network")
             networkPath = "Library.Client.Network"
@@ -373,17 +435,24 @@ function PetSim99:Connect(active)
                 networkPath = "Library.Network"
             end
             self._networkProvider = networkPath
-            self._phase = "Loading legacy network ModuleScript"
+            self._phase = "Loading " .. networkPath .. " ModuleScript directly"
             self:_report()
             network = requireModule(networkModule, networkPath, loader)
             if not current() then return end
+            self._phase = "Loading Library.Client.PetCmds ModuleScript directly"
+            self:_report()
             petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
             if not current() then return end
-            local worldModule = client:FindFirstChild("WorldCmds")
-            if worldModule and worldModule:IsA("ModuleScript") then
-                local loaded, value = pcall(loader, worldModule)
-                if not current() then return end
-                if loaded then world = value end
+            -- WorldCmds is optional. Do not let a second native require stall Direct mode.
+            if mode ~= "Direct" then
+                local worldModule = client:FindFirstChild("WorldCmds")
+                if worldModule and worldModule:IsA("ModuleScript") then
+                    self._phase = "Loading optional WorldCmds ModuleScript"
+                    self:_report()
+                    local loaded, value = pcall(loader, worldModule)
+                    if not current() then return end
+                    if loaded then world = value end
+                end
             end
         end
         self._phase = "Inspecting network and pet command exports"

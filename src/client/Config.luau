@@ -2,7 +2,7 @@
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.8.0",
+    Version = "0.12.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -10,10 +10,13 @@ return table.freeze({
     }),
     Options = table.freeze({
         AutoFarm = false,
+        HeavenChestAssist = false, -- Previous single-chest assist; kept for compatibility.
+        HeavenIslandSweep = false, -- Object-targeted local scanner; no module/network probing.
         AutoCollectOrbs = false,
         AutoCollectLootbags = false,
         WalkToTarget = false,
         FarmMode = "Nearest",
+        ModulePathMode = "Direct", -- Live client loaded child modules; Facade remains a manual alternative.
         Area = "All",
         NameFilter = "",
         Radius = 200,

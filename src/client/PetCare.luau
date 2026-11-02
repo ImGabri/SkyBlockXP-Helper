@@ -13,6 +13,27 @@ local function number(value) return type(value) == "number" and value == value a
 local function child(parent, name) return parent and parent:FindFirstChild(name) end
 local function samePlace() return game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId end
 
+-- Structural diagnostics only: no balances, UIDs, pet details or arbitrary key values.
+-- The result shape is not permission to convert pets through an unverified schema.
+local function describeSaveShape(value)
+    if type(value) ~= "table" then return "Save.Get result type=" .. typeof(value) .. "; Pets=unavailable" end
+    local pieces = { "Save.Get result type=table" }
+    local function describeField(parent, field)
+        local ok, result = pcall(function() return parent[field] end)
+        return if ok then typeof(result) else "read-error"
+    end
+    for _, field in ipairs({ "Pets", "Inventory", "Data", "Save" }) do
+        table.insert(pieces, field .. "=" .. describeField(value, field))
+    end
+    for _, field in ipairs({ "Inventory", "Data", "Save" }) do
+        local ok, section = pcall(function() return value[field] end)
+        if ok and type(section) == "table" then
+            table.insert(pieces, field .. ".Pets=" .. describeField(section, "Pets"))
+        end
+    end
+    return table.concat(pieces, "; ")
+end
+
 function PetCare.new()
     return setmetatable({ Supported = none(), Reason = "Pet tools idle — click Load pet tools.",
         Report = "Pet tools not loaded.", Counts = { HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
@@ -20,8 +41,12 @@ function PetCare.new()
 end
 
 function PetCare:_report()
-    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
-        .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
+    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nModule path mode: " .. (self._mode or "Facade")
+        .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+        .. "\nPet-tool provider: " .. (if self._mode == "Direct" then "Library.Client + Library.Directory child modules" else "ReplicatedStorage.Library facade")
+        .. " (public game modules). Legacy commands; current game acceptance unverified."
+        .. "\nSave shape: " .. (self._saveReport or "not inspected; no inventory values recorded")
+        .. "\nSave.Get call: " .. (self._saveCallReport or "not inspected")
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
@@ -31,13 +56,16 @@ function PetCare:_occupied()
     return self._busy ~= nil
 end
 
-function PetCare:Connect(active)
+function PetCare:Connect(active, mode)
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
+    self._saveReport, self._saveCallReport = nil, nil
     self._phase = "Checking game and public Library"
     self:_report()
     local ok, message = pcall(function()
@@ -54,32 +82,61 @@ function PetCare:Connect(active)
         end
         if not current() then return end
         self._loader = loaderName
-        self._phase = "Loading pet API facade"
-        self:_report()
-        local facade = loader(library)
-        if not current() then return end
-        if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
-        self._phase = "Reading public Library.Network"
-        self:_report()
-        local network = facade.Network
-        if not current() then return end
+        local network, save, pets, directory, facade
+        if mode == "Direct" then
+            -- Only explicitly named ModuleScripts exposed by the game are used.
+            -- Never run this as a fallback while the facade's require is in flight.
+            local client = library:FindFirstChild("Client")
+            if not client then error("Library.Client ModuleScript is missing; Direct mode unavailable.", 0) end
+            local function direct(parent, name, path)
+                local module = parent:FindFirstChild(name)
+                if not module or not module:IsA("ModuleScript") then
+                    error(path .. " ModuleScript is missing; Direct mode unavailable.", 0)
+                end
+                if not current() then return nil end
+                self._phase = "Loading " .. path .. " directly"
+                self:_report()
+                local exports = loader(module)
+                if not current() then return nil end
+                if type(exports) ~= "table" then error(path .. " did not return a table.", 0) end
+                return exports
+            end
+            network = direct(client, "Network", "Library.Client.Network")
+            if not current() then return end
+            save = direct(client, "Save", "Library.Client.Save")
+            if not current() then return end
+            pets = direct(client, "PetCmds", "Library.Client.PetCmds")
+            if not current() then return end
+            directory = direct(library, "Directory", "Library.Directory")
+            if not current() then return end
+        else
+            self._phase = "Loading pet API facade"
+            self:_report()
+            facade = loader(library)
+            if not current() then return end
+            if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+            self._phase = "Reading public Library.Network"
+            self:_report()
+            network = facade.Network
+            if not current() then return end
+            self._phase = "Reading public Library.Save"
+            self:_report()
+            save = facade.Save
+            if not current() then return end
+            self._phase = "Reading public Library.PetCmds"
+            self:_report()
+            pets = facade.PetCmds
+            if not current() then return end
+            self._phase = "Reading public Library.Directory"
+            self:_report()
+            directory = facade.Directory
+            if not current() then return end
+        end
         local invoke = type(network) == "table" and network.Invoke
-        if not current() then return end
-        self._phase = "Reading public Library.Save"
-        self:_report()
-        local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
-        self._phase = "Reading public Library.PetCmds"
-        self:_report()
-        local pets = facade.PetCmds
-        if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
-        if not current() then return end
-        self._phase = "Reading public Library.Directory"
-        self:_report()
-        local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
         if not current() then return end
@@ -91,7 +148,7 @@ function PetCare:Connect(active)
         self._phase = "Pet API exports validated"
         self:_report()
         self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
-            eggs = eggDirectory, pets = petDirectory, facade = facade }
+            eggs = eggDirectory, pets = petDirectory, facade = facade, library = library, loader = loader }
         self._loader = loaderName
         self.Supported.AutoHatch = type(eggDirectory) == "table"
         local conversion = type(petDirectory) == "table" and type(getEquipped) == "function"
@@ -102,6 +159,48 @@ function PetCare:Connect(active)
     if not ok then self.Reason = tostring(message) end
     self:_report()
     return self
+end
+
+-- A manual, read-only check. It calls Save.Get only, never invokes a conversion remote.
+function PetCare:InspectSave(active)
+    if self._destroyed or not samePlace() or not self._api or type(self._api.getSave) ~= "function" then
+        error("Load pet tools before inspecting the save layout.", 0)
+    end
+    if active and not active() then return false end
+    if self:_occupied() then error("Another pet operation is still active; no overlapping save read.", 0) end
+    local generation = self._generation
+    local owner = coroutine.running()
+    self._busy = owner
+    self._phase = "Inspecting Save.Get layout (read-only)"
+    self:_report()
+    local call = table.pack(pcall(self._api.getSave))
+    if self._busy == owner then self._busy = nil end
+    if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
+    local returns = math.max(0, call.n - 1)
+    self._saveCallReport = "returns=" .. tostring(returns)
+        .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
+    if debug and type(debug.info) == "function" then
+        local metaOk, args, variadic = pcall(debug.info, self._api.getSave, "a")
+        if metaOk then
+            self._saveCallReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic)
+        end
+    end
+    if not call[1] then
+        self._saveReport = "Save.Get raised an error; no inventory values recorded"
+        self:_report()
+        error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
+    end
+    local value = call[2]
+    self._saveReport = describeSaveShape(value)
+    self._phase = "Save.Get layout inspected (read-only)"
+    if type(value) ~= "table" or type(value.Pets) ~= "table" then
+        -- Module existence does not establish readiness for a pet mutation.
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(value) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
+    end
+    self:_report()
+    return true
 end
 
 function PetCare:_run(key, active, work)
@@ -164,6 +263,11 @@ function PetCare:_hatchPlan(eggName, mode, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
+    self._saveReport = describeSaveShape(save)
+    self:_report()
+    if type(save) ~= "table" then
+        self.Supported.AutoHatch, self.Supported.AutoGold, self.Supported.AutoRainbow = false, false, false
+    end
     if type(save) ~= "table" or not number(save[egg.currency]) then
         error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
     end
@@ -189,7 +293,15 @@ function PetCare:GetEggTarget(eggName, active)
         if not current() then return nil end
         self._phase = "Reading public Library.WorldCmds for loaded eggs"
         self:_report()
-        local available, world = pcall(function() return self._api.facade.WorldCmds end)
+        local available, world = pcall(function()
+            if self._mode == "Direct" then
+                local client = self._api.library:FindFirstChild("Client")
+                local module = client and client:FindFirstChild("WorldCmds")
+                if not module or not module:IsA("ModuleScript") then error("Direct WorldCmds ModuleScript is unavailable.", 0) end
+                return self._api.loader(module)
+            end
+            return self._api.facade.WorldCmds
+        end)
         if not current() then return nil end
         local getEggs = available and type(world) == "table" and world.GetAllEggs
         if not current() then return nil end
@@ -283,11 +395,20 @@ function PetCare:_conversionBatch(variant, selected, current)
     if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
     local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
         or definition.rarity == "Exclusive" or definition.rarity == "Event"
-    self._phase = "Reading conversion inventory via Save.Get"
+    self._phase = "Reading Save.Get for conversion eligibility"
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    self._saveReport = describeSaveShape(save)
+    self:_report()
+    if type(save) ~= "table" or type(save.Pets) ~= "table" then
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(save) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get inventory unavailable; conversion disabled until a fresh pet-tool load."
+        self:_report()
+        error("Save.Get did not provide a Pets table (" .. self._saveReport
+            .. "). No pets submitted. Use Inspect save layout for read-only diagnostics.", 0)
+    end
     self._phase = "Reading equipped pets via PetCmds.GetEquipped"
     self:_report()
     local equipped = self._api.getEquipped()

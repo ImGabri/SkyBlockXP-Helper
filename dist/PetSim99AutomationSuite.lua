@@ -8,7 +8,7 @@ __factories["Config.luau"] = function(__require)
 
 return table.freeze({
     Name = "Pet Sim 99 (Pet Sim X) Automation suite",
-    Version = "0.8.0",
+    Version = "0.12.0",
     -- Observed in the user's Roblox client log while inside the Classic Event.
     Target = table.freeze({
         PlaceId = 85920622393590,
@@ -16,10 +16,13 @@ return table.freeze({
     }),
     Options = table.freeze({
         AutoFarm = false,
+        HeavenChestAssist = false, -- Previous single-chest assist; kept for compatibility.
+        HeavenIslandSweep = false, -- Object-targeted local scanner; no module/network probing.
         AutoCollectOrbs = false,
         AutoCollectLootbags = false,
         WalkToTarget = false,
         FarmMode = "Nearest",
+        ModulePathMode = "Direct", -- Live client loaded child modules; Facade remains a manual alternative.
         Area = "All",
         NameFilter = "",
         Radius = 200,
@@ -582,7 +585,8 @@ function Interface.mount(spec)
         end)
     end
 
-    toggle("Farm", "Auto farm", "AutoFarm")
+    actionButton("Farm", "START Heaven Island AutoFarm [B]", "StartHeavenSweep")
+    actionButton("Farm", "STOP Heaven Island AutoFarm [B]", "StopHeavenSweep")
     toggle("Farm", "Collect orbs", "AutoCollectOrbs")
     toggle("Farm", "Collect lootbags", "AutoCollectLootbags")
     toggle("Farm", "Walk toward target", "WalkToTarget")
@@ -592,7 +596,12 @@ function Interface.mount(spec)
     input("Farm", "Search radius (studs)", "Radius", 10, 1000)
     input("Farm", "Farm interval (seconds)", "FarmInterval", 0.25, 10)
     actionButton("Farm", "Inspect local environment (no network)", "InspectEnvironment")
-    actionButton("Farm", "Run compatibility check", "Reconnect")
+    actionButton("Farm", "Inspect visible coin models (no network)", "InspectCoinModels")
+    cycle("Farm", "Module path (retry after fresh rejoin)", "ModulePathMode", { "Facade", "Direct" })
+    actionButton("Farm", "SCAN small breakables NOW (no network)", "ScanHeavenTargets")
+    actionButton("Farm", "START AutoFarm (detected targets)", "StartHeavenSweep")
+    actionButton("Farm", "STOP AutoFarm", "StopHeavenSweep")
+    actionButton("Farm", "Legacy Get Coins check (unsupported)", "Reconnect")
     actionButton("Farm", "STOP ALL", "StopAll", true)
 
     rowOrder += 1
@@ -607,6 +616,7 @@ function Interface.mount(spec)
         Text = "Eggs spend in-game currency. Open Inventory first; only 6 matching, eligible, unlocked pets are used. Walk mode approaches the loaded machine before converting. Off requires you to stand near it yourself. The server decides access and chances.",
     })
     actionButton("Pets", "Load pet tools", "PrepareCare")
+    actionButton("Pets", "Inspect save layout (read-only)", "InspectSave")
     input("Pets", "Egg name", "EggName")
     actionButton("Pets", "Next egg", "NextEgg")
     cycle("Pets", "Hatch mode", "HatchMode", { "Single", "Triple", "Octuple" })
@@ -667,7 +677,11 @@ function Interface.mount(spec)
             tostring(snapshot.WorkerStatus or "No active jobs."),
             tostring(snapshot.Capabilities or "Checking..."),
             tostring(snapshot.LastError or "None")
-        )
+        ) .. "\n\nHEAVEN ISLAND TARGET DETECTION\n" .. tostring(snapshot.HeavenScanStatus or "Not scanned")
+            .. "\nHEAVEN ISLAND AUTO FARM\n" .. tostring(snapshot.HeavenSweepStatus or "Off")
+            .. "\nClick attempts: " .. tostring(snapshot.HeavenSweepClicks or 0)
+            .. "\n\nHEAVEN CHEST ASSIST (OLD)\n" .. tostring(snapshot.ChestStatus or "Off")
+            .. "\nClicks attempted: " .. tostring(snapshot.ChestClicks or 0)
     end)
     actionButton("Status", "Copy diagnostics", "CopyDiagnostics")
     actionButton("Status", "Clear status error", "ClearError")
@@ -1058,6 +1072,27 @@ local function number(value) return type(value) == "number" and value == value a
 local function child(parent, name) return parent and parent:FindFirstChild(name) end
 local function samePlace() return game.PlaceId == Config.Target.PlaceId and game.GameId == Config.Target.UniverseId end
 
+-- Structural diagnostics only: no balances, UIDs, pet details or arbitrary key values.
+-- The result shape is not permission to convert pets through an unverified schema.
+local function describeSaveShape(value)
+    if type(value) ~= "table" then return "Save.Get result type=" .. typeof(value) .. "; Pets=unavailable" end
+    local pieces = { "Save.Get result type=table" }
+    local function describeField(parent, field)
+        local ok, result = pcall(function() return parent[field] end)
+        return if ok then typeof(result) else "read-error"
+    end
+    for _, field in ipairs({ "Pets", "Inventory", "Data", "Save" }) do
+        table.insert(pieces, field .. "=" .. describeField(value, field))
+    end
+    for _, field in ipairs({ "Inventory", "Data", "Save" }) do
+        local ok, section = pcall(function() return value[field] end)
+        if ok and type(section) == "table" then
+            table.insert(pieces, field .. ".Pets=" .. describeField(section, "Pets"))
+        end
+    end
+    return table.concat(pieces, "; ")
+end
+
 function PetCare.new()
     return setmetatable({ Supported = none(), Reason = "Pet tools idle — click Load pet tools.",
         Report = "Pet tools not loaded.", Counts = { HatchRequests = 0, GoldRequests = 0, RainbowRequests = 0 },
@@ -1065,8 +1100,12 @@ function PetCare.new()
 end
 
 function PetCare:_report()
-    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
-        .. "\nPet-tool provider: ReplicatedStorage.Library (public). Legacy commands; current game acceptance unverified."
+    self.Report = "Pet stage: " .. tostring(self._phase or "not started") .. "\nModule path mode: " .. (self._mode or "Facade")
+        .. "\nPet tools: " .. self.Reason .. "\nPet-tool loader: " .. (self._loader or "not selected")
+        .. "\nPet-tool provider: " .. (if self._mode == "Direct" then "Library.Client + Library.Directory child modules" else "ReplicatedStorage.Library facade")
+        .. " (public game modules). Legacy commands; current game acceptance unverified."
+        .. "\nSave shape: " .. (self._saveReport or "not inspected; no inventory values recorded")
+        .. "\nSave.Get call: " .. (self._saveCallReport or "not inspected")
         .. "\nConversion: exactly six; explicit species; loaded unlocked inventory slots required."
         .. "\nRequests are counted, not confirmed hatches or conversion rewards."
 end
@@ -1076,13 +1115,16 @@ function PetCare:_occupied()
     return self._busy ~= nil
 end
 
-function PetCare:Connect(active)
+function PetCare:Connect(active, mode)
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     if self:_occupied() then error("A pet-tool operation is still returning. Stop it and wait before loading again.", 0) end
     if active and not active() then return self end
     self._generation += 1
     local generation = self._generation
     local function current() return self._generation == generation and not self._destroyed and (not active or active()) end
     self.Supported, self._api = none(), nil
+    self._saveReport, self._saveCallReport = nil, nil
     self._phase = "Checking game and public Library"
     self:_report()
     local ok, message = pcall(function()
@@ -1099,32 +1141,61 @@ function PetCare:Connect(active)
         end
         if not current() then return end
         self._loader = loaderName
-        self._phase = "Loading pet API facade"
-        self:_report()
-        local facade = loader(library)
-        if not current() then return end
-        if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
-        self._phase = "Reading public Library.Network"
-        self:_report()
-        local network = facade.Network
-        if not current() then return end
+        local network, save, pets, directory, facade
+        if mode == "Direct" then
+            -- Only explicitly named ModuleScripts exposed by the game are used.
+            -- Never run this as a fallback while the facade's require is in flight.
+            local client = library:FindFirstChild("Client")
+            if not client then error("Library.Client ModuleScript is missing; Direct mode unavailable.", 0) end
+            local function direct(parent, name, path)
+                local module = parent:FindFirstChild(name)
+                if not module or not module:IsA("ModuleScript") then
+                    error(path .. " ModuleScript is missing; Direct mode unavailable.", 0)
+                end
+                if not current() then return nil end
+                self._phase = "Loading " .. path .. " directly"
+                self:_report()
+                local exports = loader(module)
+                if not current() then return nil end
+                if type(exports) ~= "table" then error(path .. " did not return a table.", 0) end
+                return exports
+            end
+            network = direct(client, "Network", "Library.Client.Network")
+            if not current() then return end
+            save = direct(client, "Save", "Library.Client.Save")
+            if not current() then return end
+            pets = direct(client, "PetCmds", "Library.Client.PetCmds")
+            if not current() then return end
+            directory = direct(library, "Directory", "Library.Directory")
+            if not current() then return end
+        else
+            self._phase = "Loading pet API facade"
+            self:_report()
+            facade = loader(library)
+            if not current() then return end
+            if type(facade) ~= "table" then error("Public Library did not return a table.", 0) end
+            self._phase = "Reading public Library.Network"
+            self:_report()
+            network = facade.Network
+            if not current() then return end
+            self._phase = "Reading public Library.Save"
+            self:_report()
+            save = facade.Save
+            if not current() then return end
+            self._phase = "Reading public Library.PetCmds"
+            self:_report()
+            pets = facade.PetCmds
+            if not current() then return end
+            self._phase = "Reading public Library.Directory"
+            self:_report()
+            directory = facade.Directory
+            if not current() then return end
+        end
         local invoke = type(network) == "table" and network.Invoke
-        if not current() then return end
-        self._phase = "Reading public Library.Save"
-        self:_report()
-        local save = facade.Save
         if not current() then return end
         local getSave = type(save) == "table" and save.Get
         if not current() then return end
-        self._phase = "Reading public Library.PetCmds"
-        self:_report()
-        local pets = facade.PetCmds
-        if not current() then return end
         local getEquipped = type(pets) == "table" and pets.GetEquipped
-        if not current() then return end
-        self._phase = "Reading public Library.Directory"
-        self:_report()
-        local directory = facade.Directory
         if not current() then return end
         local eggDirectory = type(directory) == "table" and directory.Eggs
         if not current() then return end
@@ -1136,7 +1207,7 @@ function PetCare:Connect(active)
         self._phase = "Pet API exports validated"
         self:_report()
         self._api = { invoke = invoke, getSave = getSave, getEquipped = getEquipped,
-            eggs = eggDirectory, pets = petDirectory, facade = facade }
+            eggs = eggDirectory, pets = petDirectory, facade = facade, library = library, loader = loader }
         self._loader = loaderName
         self.Supported.AutoHatch = type(eggDirectory) == "table"
         local conversion = type(petDirectory) == "table" and type(getEquipped) == "function"
@@ -1147,6 +1218,48 @@ function PetCare:Connect(active)
     if not ok then self.Reason = tostring(message) end
     self:_report()
     return self
+end
+
+-- A manual, read-only check. It calls Save.Get only, never invokes a conversion remote.
+function PetCare:InspectSave(active)
+    if self._destroyed or not samePlace() or not self._api or type(self._api.getSave) ~= "function" then
+        error("Load pet tools before inspecting the save layout.", 0)
+    end
+    if active and not active() then return false end
+    if self:_occupied() then error("Another pet operation is still active; no overlapping save read.", 0) end
+    local generation = self._generation
+    local owner = coroutine.running()
+    self._busy = owner
+    self._phase = "Inspecting Save.Get layout (read-only)"
+    self:_report()
+    local call = table.pack(pcall(self._api.getSave))
+    if self._busy == owner then self._busy = nil end
+    if self._destroyed or self._generation ~= generation or (active and not active()) then return false end
+    local returns = math.max(0, call.n - 1)
+    self._saveCallReport = "returns=" .. tostring(returns)
+        .. "; first type=" .. (if returns > 0 then typeof(call[2]) else "none")
+    if debug and type(debug.info) == "function" then
+        local metaOk, args, variadic = pcall(debug.info, self._api.getSave, "a")
+        if metaOk then
+            self._saveCallReport ..= "; expected args=" .. tostring(args) .. "; variadic=" .. tostring(variadic)
+        end
+    end
+    if not call[1] then
+        self._saveReport = "Save.Get raised an error; no inventory values recorded"
+        self:_report()
+        error("Save.Get failed during read-only inspection: " .. tostring(call[2]), 0)
+    end
+    local value = call[2]
+    self._saveReport = describeSaveShape(value)
+    self._phase = "Save.Get layout inspected (read-only)"
+    if type(value) ~= "table" or type(value.Pets) ~= "table" then
+        -- Module existence does not establish readiness for a pet mutation.
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(value) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get supplied no validated inventory. Pet mutations requiring that data are disabled; rejoin/reload when save is ready."
+    end
+    self:_report()
+    return true
 end
 
 function PetCare:_run(key, active, work)
@@ -1209,6 +1322,11 @@ function PetCare:_hatchPlan(eggName, mode, current)
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
+    self._saveReport = describeSaveShape(save)
+    self:_report()
+    if type(save) ~= "table" then
+        self.Supported.AutoHatch, self.Supported.AutoGold, self.Supported.AutoRainbow = false, false, false
+    end
     if type(save) ~= "table" or not number(save[egg.currency]) then
         error("Unreadable " .. egg.currency .. " balance for this hatch mode.", 0)
     end
@@ -1234,7 +1352,15 @@ function PetCare:GetEggTarget(eggName, active)
         if not current() then return nil end
         self._phase = "Reading public Library.WorldCmds for loaded eggs"
         self:_report()
-        local available, world = pcall(function() return self._api.facade.WorldCmds end)
+        local available, world = pcall(function()
+            if self._mode == "Direct" then
+                local client = self._api.library:FindFirstChild("Client")
+                local module = client and client:FindFirstChild("WorldCmds")
+                if not module or not module:IsA("ModuleScript") then error("Direct WorldCmds ModuleScript is unavailable.", 0) end
+                return self._api.loader(module)
+            end
+            return self._api.facade.WorldCmds
+        end)
         if not current() then return nil end
         local getEggs = available and type(world) == "table" and world.GetAllEggs
         if not current() then return nil end
@@ -1328,11 +1454,20 @@ function PetCare:_conversionBatch(variant, selected, current)
     if type(definition) ~= "table" or not text(definition.rarity) then error("Unknown species metadata.", 0) end
     local premium = definition.isPremium or definition.isGift or definition.huge or definition.titanic
         or definition.rarity == "Exclusive" or definition.rarity == "Event"
-    self._phase = "Reading conversion inventory via Save.Get"
+    self._phase = "Reading Save.Get for conversion eligibility"
     self:_report()
     local save = self._api.getSave()
     if not current() then return nil end
-    if type(save) ~= "table" or type(save.Pets) ~= "table" then error("Save.Get did not provide a Pets table.", 0) end
+    self._saveReport = describeSaveShape(save)
+    self:_report()
+    if type(save) ~= "table" or type(save.Pets) ~= "table" then
+        self.Supported.AutoGold, self.Supported.AutoRainbow = false, false
+        if type(save) ~= "table" then self.Supported.AutoHatch = false end
+        self.Reason = "Save.Get inventory unavailable; conversion disabled until a fresh pet-tool load."
+        self:_report()
+        error("Save.Get did not provide a Pets table (" .. self._saveReport
+            .. "). No pets submitted. Use Inspect save layout for read-only diagnostics.", 0)
+    end
     self._phase = "Reading equipped pets via PetCmds.GetEquipped"
     self:_report()
     local equipped = self._api.getEquipped()
@@ -1456,16 +1591,21 @@ end
 
 local function childSummary(parent, limit)
     if not parent then return "not present" end
-    local names = {}
+    local counts, labels, total = {}, {}, 0
     for _, child in ipairs(parent:GetChildren()) do
-        table.insert(names, child.Name .. " (" .. child.ClassName .. ")")
+        local name = child.Name .. " (" .. child.ClassName .. ")"
+        if counts[name] == nil then table.insert(labels, name); counts[name] = 0 end
+        counts[name] += 1
+        total += 1
     end
-    table.sort(names)
-    local total = #names
-    while #names > limit do table.remove(names) end
-    local result = table.concat(names, ", ")
-    if total > limit then result ..= string.format(" ... (%d more)", total - limit) end
-    return if result == "" then "empty" else result
+    table.sort(labels)
+    local summary = {}
+    for index, name in ipairs(labels) do
+        if index > limit then break end
+        table.insert(summary, name .. (if counts[name] > 1 then " x" .. counts[name] else ""))
+    end
+    if #labels > limit then table.insert(summary, string.format("... (%d other distinct labels)", #labels - limit)) end
+    return if total == 0 then "empty" else string.format("%d children: %s", total, table.concat(summary, ", "))
 end
 
 local function selectLoader()
@@ -1543,12 +1683,14 @@ end
 function PetSim99:_report()
     self.Report = "Probe stage: " .. tostring(self._phase or "not started") .. "\n" .. (self._diagnostics or "Not inspected yet.") .. "\nAdapter: " .. self.Reason
         .. "\nGet Coins response: " .. (self._coinResponse or "not called")
+        .. "\nModule path mode: " .. (self._mode or "Facade")
         .. "\nModule loader: " .. (self._loaderName or "not selected")
         .. "\nNetwork provider: " .. (self._networkProvider or "not selected")
         .. "\nNetwork exports: " .. (self._networkExports or "not loaded")
         .. "\nPetCmds exports: " .. (self._petExports or "not loaded")
         .. string.format("\nRequests only: %d pet farm dispatches; %d orb IDs; %d lootbag IDs. No collection/break confirmation is inferred.",
             self._counts.FarmDispatches, self._counts.OrbIds, self._counts.LootbagIds)
+        .. "\n" .. (self._localCoinReport or "Local coin inspection: not run")
 end
 
 function PetSim99:_block(message)
@@ -1607,7 +1749,7 @@ function PetSim99:_readSnapshot(probe, active)
     end
     local root = self:_root()
     if returned.n == 0 then
-        error("Get Coins returned no values (returns=0; types=none). This native route provided no coin data. Inspect Network._check warnings and rejoin before another manual probe.", 0)
+        error("Get Coins returned no values (returns=0; types=none). The legacy command supplied no coin dictionary even though the modules loaded. AutoFarm remains disabled; use Inspect visible coin models for a read-only check, not repeated network probes.", 0)
     end
     if type(records) ~= "table" then
         error("Get Coins returned an unsupported response (" .. responseSummary(returned)
@@ -1702,10 +1844,16 @@ function PetSim99:Inspect()
     elseif library:IsA("Folder") and not client then
         table.insert(issues, "Legacy Library.Client folder is missing.")
     end
+    local modelCount = 0
     if not coins or not coins:IsA("Folder") then
         table.insert(issues, "No loaded __THINGS.Coins folder.")
-    elseif #coins:GetChildren() == 0 then
-        table.insert(issues, "No coin models are loaded nearby.")
+    else
+        for _, item in ipairs(coins:GetChildren()) do
+            if item:IsA("Model") then modelCount += 1 end
+        end
+        if modelCount == 0 then
+            table.insert(issues, "No loaded coin models; move normally into an event breakable area before any compatibility request.")
+        end
     end
     if not root or not root:IsA("BasePart") then
         table.insert(issues, "Character HumanoidRootPart is unavailable.")
@@ -1717,7 +1865,7 @@ function PetSim99:Inspect()
         "Library: " .. (if library then library.ClassName else "missing"),
         "Library.Client: " .. childSummary(client, 50),
         "__THINGS: " .. childSummary(things, 40),
-        "Coins: " .. (if coins then tostring(#coins:GetChildren()) else "missing"),
+        "Coin models: " .. (if coins then tostring(modelCount) else "missing"),
         "Character root: " .. (if root then "present" else "missing"),
         "Preflight issues: " .. (if #issues == 0 then "none" else table.concat(issues, "; ")),
     }, "\n")
@@ -1728,8 +1876,57 @@ function PetSim99:Inspect()
         else table.concat(issues, "; ")
 end
 
-function PetSim99:Connect(active)
+-- Read-only client view. This never invokes a game module or sends remote requests.
+-- Coin models establish visible geometry, not server health, ownership or pet assignments.
+function PetSim99:InspectCoinModels()
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    if not coins or not coins:IsA("Folder") then
+        self._localCoinReport = "Local coin inspection: __THINGS.Coins folder unavailable."
+        self:_report()
+        return false, self._localCoinReport
+    end
+    local root
+    local player = game:GetService("Players").LocalPlayer
+    local character = player and player.Character
+    local candidate = character and character:FindFirstChild("HumanoidRootPart")
+    if candidate and candidate:IsA("BasePart") and vector(candidate.Position) then root = candidate end
+    local models, markers, samples = 0, 0, {}
+    for _, item in ipairs(coins:GetChildren()) do
+        if item:IsA("Model") then
+            models += 1
+            local part = item:FindFirstChild("Coin") or item:FindFirstChild("POS")
+            if part and part:IsA("BasePart") and vector(part.Position) then
+                markers += 1
+                local distance = if root then (root.Position - part.Position).Magnitude else nil
+                table.insert(samples, { name = item.Name, marker = part.Name, distance = distance })
+            end
+        end
+    end
+    table.sort(samples, function(a, b)
+        if a.distance and b.distance and a.distance ~= b.distance then
+            return a.distance < b.distance
+        end
+        return tostring(a.name) < tostring(b.name)
+    end)
+    local rows = {}
+    for i = 1, math.min(#samples, 12) do
+        local item = samples[i]
+        table.insert(rows, tostring(item.name) .. " [" .. item.marker .. "]"
+            .. (if item.distance then string.format(" %.1f studs", item.distance) else " (no character root)"))
+    end
+    self._localCoinReport = string.format(
+        "Local coin inspection (read-only): loaded models=%d, valid position markers=%d, root=%s. No server metadata or farming compatibility inferred.\nSamples: %s",
+        models, markers, if root then "present" else "missing",
+        if #rows > 0 then table.concat(rows, ", ") else "none")
+    self:_report()
+    return true, self._localCoinReport
+end
+
+function PetSim99:Connect(active, mode)
     if active and not active() then return self end
+    mode = if mode == "Direct" then "Direct" else "Facade"
+    self._mode = mode
     self._generation += 1
     local generation = self._generation
     local function current()
@@ -1778,8 +1975,8 @@ function PetSim99:Connect(active)
         if not current() then return end
         self._moduleLoader, self._loaderName = loader, loaderName
         local network, petCmds, world, networkPath
-        if library:IsA("ModuleScript") then
-            -- Use the documented public library rather than bypassing its facade.
+        if library:IsA("ModuleScript") and mode == "Facade" then
+            -- The documented facade is an explicit mode; do not retry an unresolved call through another path.
             self._networkProvider = "ReplicatedStorage.Library"
             networkPath = "ReplicatedStorage.Library.Network"
             self._phase = "Loading ReplicatedStorage.Library ModuleScript"
@@ -1797,7 +1994,7 @@ function PetSim99:Connect(active)
                 error("Public ReplicatedStorage.Library facade lacks Network/PetCmds tables. Internal client networking was not retried.", 0)
             end
         else
-            -- Compatibility for legacy folder-only layouts; current event has a facade.
+            -- Explicit Direct mode, or legacy folder-only layout. Never a timeout fallback.
             if not client then error("Library.Client is not loaded. Wait inside the event and reconnect.", 0) end
             local networkModule = client:FindFirstChild("Network")
             networkPath = "Library.Client.Network"
@@ -1806,17 +2003,24 @@ function PetSim99:Connect(active)
                 networkPath = "Library.Network"
             end
             self._networkProvider = networkPath
-            self._phase = "Loading legacy network ModuleScript"
+            self._phase = "Loading " .. networkPath .. " ModuleScript directly"
             self:_report()
             network = requireModule(networkModule, networkPath, loader)
             if not current() then return end
+            self._phase = "Loading Library.Client.PetCmds ModuleScript directly"
+            self:_report()
             petCmds = requireModule(client:FindFirstChild("PetCmds"), "Library.Client.PetCmds", loader)
             if not current() then return end
-            local worldModule = client:FindFirstChild("WorldCmds")
-            if worldModule and worldModule:IsA("ModuleScript") then
-                local loaded, value = pcall(loader, worldModule)
-                if not current() then return end
-                if loaded then world = value end
+            -- WorldCmds is optional. Do not let a second native require stall Direct mode.
+            if mode ~= "Direct" then
+                local worldModule = client:FindFirstChild("WorldCmds")
+                if worldModule and worldModule:IsA("ModuleScript") then
+                    self._phase = "Loading optional WorldCmds ModuleScript"
+                    self:_report()
+                    local loaded, value = pcall(loader, worldModule)
+                    if not current() then return end
+                    if loaded then world = value end
+                end
             end
         end
         self._phase = "Inspecting network and pet command exports"
@@ -2012,6 +2216,8 @@ local numeric = {
 }
 local booleans = {
     AutoFarm = true,
+    HeavenChestAssist = true,
+    HeavenIslandSweep = true,
     AutoCollectOrbs = true,
     AutoCollectLootbags = true,
     WalkToTarget = true,
@@ -2037,6 +2243,10 @@ function Policy.option(key: string, value: any): (any, string?)
             return nil, "Enter a finite number."
         end
         return math.clamp(number, range[1], range[2]), nil
+    end
+    if key == "ModulePathMode" then
+        if value == "Facade" or value == "Direct" then return value, nil end
+        return nil, "Choose Facade or Direct for module loading."
     end
     if key == "FarmMode" then
         if value == "Nearest" or value == "Weakest" or value == "Strongest" then
@@ -2137,6 +2347,8 @@ function Runtime.new(player, parent)
     })
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
+        if self.Options.HeavenChestAssist then self:StopHeavenChest() end
+        if self.Options.HeavenIslandSweep then self:StopHeavenSweep() end
         self.Jobs:cancel("care")
         self.Navigator:Stop()
         self:StopNavigation()
@@ -2164,6 +2376,25 @@ function Runtime.new(player, parent)
             self:Publish()
         end
     end))
+    -- B toggles only the local Heaven Island input farm. Respect UI text input.
+    local inputOk, input = pcall(function() return game:GetService("UserInputService") end)
+    if inputOk and input and input.InputBegan then
+        table.insert(self.Connections, input.InputBegan:Connect(function(key, processed)
+            if processed or not self.Alive or not key or not Enum or not Enum.KeyCode
+                or key.KeyCode ~= Enum.KeyCode.B then return end
+            local focusOk, focused = pcall(input.GetFocusedTextBox, input)
+            if focusOk and focused then return end
+            if self.Options.HeavenIslandSweep then
+                self:StopHeavenSweep()
+            else
+                local started, reason = self:StartHeavenSweep()
+                if not started then
+                    self.State.LastError = "B AutoFarm toggle: " .. tostring(reason)
+                    self:Publish()
+                end
+            end
+        end))
+    end
     table.insert(self.Connections, game:GetService("TeleportService").TeleportInitFailed:Connect(function(who, _, message)
         if who == player and self.Alive then
             self.State.LastError = "Rejoin failed: " .. tostring(message)
@@ -2171,6 +2402,12 @@ function Runtime.new(player, parent)
         end
     end))
     self:Publish()
+    -- Initial local scan runs automatically on load, with no game module or remote calls.
+    local scanOk, scanMessage = pcall(function() self:ScanHeavenTargets() end)
+    if not scanOk then
+        self.State.HeavenScanStatus = "Initial local scan unavailable: " .. tostring(scanMessage)
+        self:Publish()
+    end
     self.Pulse = task.spawn(function()
         while self.Alive do
             local ok, message = pcall(function()
@@ -2186,6 +2423,412 @@ function Runtime.new(player, parent)
         end
     end)
     return self
+end
+
+-- Heaven Island chest input helper. Does not use Save.Get, game remotes or
+-- the legacy Get Coins protocol. It clicks once per captured BasePart instance
+-- and waits until that part disappears before clicking a matching replacement.
+-- The actual game-side response is not confirmed by a synthetic click.
+function Runtime:ArmHeavenChest()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" then
+        return false, "This executor has no mouse1click() support."
+    end
+    self.Options.HeavenChestAssist = true
+    self.ChestArmAt = os.clock() + 3
+    self.ChestClickedPart, self.ChestAnchorPosition = nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Move your cursor over the Heaven chest: capturing in 3 seconds."
+    self.State.LastError = ""
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenChest()
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Stopped"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenChest()
+    if not self.Options.HeavenChestAssist then return end
+    local character = self.Player.Character
+    if not character or not character.Parent then return end
+    if type(mouse1click) ~= "function" then
+        self.State.LastError = "Heaven chest input unsupported: mouse1click() is missing."
+        self:StopHeavenChest()
+        return
+    end
+    local mouse = self.Player:GetMouse()
+    local target = mouse and mouse.Target
+    local function usable(part)
+        return part and part:IsA("BasePart") and part:IsDescendantOf(workspace)
+            and not part:IsDescendantOf(character)
+    end
+    if self.ChestArmAt then
+        if os.clock() < self.ChestArmAt then return end
+        self.ChestArmAt = nil
+        if not usable(target) then
+            self.State.LastError = "No world BasePart under cursor. Aim at the chest when arming."
+            self:StopHeavenChest()
+            return
+        end
+        self.ChestAnchorName = target.Name
+        self.ChestAnchorParent = target.Parent and target.Parent.Name or ""
+        self.ChestAnchorPosition = target.Position
+        self.State.ChestStatus = "Captured " .. target.Name .. "; initial click pending"
+    end
+    if not self.ChestAnchorPosition then return end
+    if self.ChestClickedPart then
+        if self.ChestClickedPart:IsDescendantOf(workspace) then return end
+        self.ChestClickedPart = nil
+        self.State.ChestStatus = "Chest disappeared; waiting for matching respawn under cursor"
+        self:Publish()
+    end
+    if not usable(target) or target.Name ~= self.ChestAnchorName
+        or (target.Parent and target.Parent.Name or "") ~= self.ChestAnchorParent
+        or (target.Position - self.ChestAnchorPosition).Magnitude > 12 then return end
+    if type(isrbxactive) == "function" then
+        local ok, active = pcall(isrbxactive)
+        if not ok or not active then return end
+    end
+    local ok, result = pcall(mouse1click)
+    if not ok then
+        self.State.LastError = "Heaven chest click failed: " .. tostring(result)
+        self:StopHeavenChest()
+        return
+    end
+    self.ChestClickedPart = target
+    self.State.ChestClicks = (self.State.ChestClicks or 0) + 1
+    self.State.ChestStatus = "Clicked once; waiting for chest to disappear (rewards unverified)"
+    self:Publish()
+end
+
+-- Object-targeted Heaven Island input farm.
+-- Works only with visible, recognizably named/tagged individual breakables.
+-- Never guesses remotes, fabricates data, fires network events or sweeps blind pixels.
+local HEAVEN_CATEGORIES = {
+    { "Vault", { "vault", "safe" } },
+    { "Gift", { "gift", "present" } },
+    { "Chest", { "chest" } },
+    { "Coin", { "coin", "pile", "diamond" } },
+    { "Crate", { "crate", "breakable" } },
+}
+local HEAVEN_FORBIDDEN = {
+    "heavens gate", "heaven's gate", "grand heaven", "angel chest", "giant",
+    "big chest", "boss chest", "massive", "titanic", "huge chest", "mega chest",
+}
+local HEAVEN_IGNORE = {
+    "__debris", "__mapdebris", "exclusiveeggs", "exclusiveeggpets", "pets",
+    "orbs", "lootbags", "players", "camera",
+}
+local function containsAny(name, terms)
+    for _, term in ipairs(terms) do
+        if string.find(name, term, 1, true) then return true end
+    end
+    return false
+end
+local function heavenKind(name)
+    name = string.lower(tostring(name or ""))
+    for _, definition in ipairs(HEAVEN_CATEGORIES) do
+        if containsAny(name, definition[2]) then return definition[1] end
+    end
+    return nil
+end
+local function heavenPosition(object)
+    if object:IsA("BasePart") then return object.Position end
+    if object:IsA("Model") then
+        local ok, pivot = pcall(object.GetPivot, object)
+        if ok and pivot then return pivot.Position end
+        local part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+        return part and part.Position
+    end
+    return nil
+end
+local function heavenDistance(a, b)
+    if not a or not b then return nil end
+    local ok, distance = pcall(function() return (a - b).Magnitude end)
+    if ok and type(distance) == "number" then return distance end
+    -- Also accept numeric XYZ vectors from benign test doubles and proxy values.
+    local valid = type(a.X) == "number" and type(a.Y) == "number" and type(a.Z) == "number"
+        and type(b.X) == "number" and type(b.Y) == "number" and type(b.Z) == "number"
+    if not valid then return nil end
+    local dx, dy, dz = a.X - b.X, a.Y - b.Y, a.Z - b.Z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+local function heavenExcluded(object)
+    local depth, node = 0, object
+    while node and node ~= workspace and depth < 14 do
+        local label = string.lower(tostring(node.Name or ""))
+        if containsAny(label, HEAVEN_FORBIDDEN) then return true end
+        -- Never target player pets, pick-ups, debris or visual effects.
+        if depth > 0 and containsAny(label, HEAVEN_IGNORE) then return true end
+        node, depth = node.Parent, depth + 1
+    end
+    return false
+end
+local function heavenCandidateType(object, coinsFolder)
+    if object:IsA("Model") and coinsFolder and object.Parent == coinsFolder then
+        return "Coin"
+    end
+    local kind = heavenKind(object.Name)
+    if kind then return kind end
+    if type(object.GetTags) == "function" then
+        local ok, tags = pcall(object.GetTags, object)
+        if ok and type(tags) == "table" then
+            for _, tag in ipairs(tags) do
+                kind = heavenKind(tag)
+                if kind then return kind end
+            end
+        end
+    end
+    if type(object.GetAttribute) == "function" then
+        for _, attribute in ipairs({ "BreakableType", "CoinType", "Type" }) do
+            local ok, value = pcall(object.GetAttribute, object, attribute)
+            if ok and type(value) == "string" then
+                kind = heavenKind(value)
+                if kind then return kind end
+            end
+        end
+    end
+    return nil
+end
+
+function Runtime:ScanHeavenTargets()
+    if not self.Alive then return false, "Suite unloaded." end
+    local character = self.Player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local origin = root and root.Position
+    local getAll = workspace.GetDescendants
+    if type(getAll) ~= "function" then
+        self.HeavenTargets = {}
+        self.State.HeavenScanStatus = "Workspace listing unavailable; 0 detected targets"
+        self.State.HeavenTargetCount = 0
+        self:Publish()
+        return false, self.State.HeavenScanStatus
+    end
+    local ok, objects = pcall(getAll, workspace)
+    if not ok or type(objects) ~= "table" then
+        self.HeavenTargets = {}
+        self.State.HeavenScanStatus = "Unable to read local Workspace descendants"
+        self.State.HeavenTargetCount = 0
+        self:Publish()
+        return false, self.State.HeavenScanStatus
+    end
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    local maxRadius = math.min(160, self.Options.Radius or 160)
+    local counts, targets, reviewed = {}, {}, 0
+    for _, object in ipairs(objects) do
+        reviewed += 1
+        if reviewed > 40000 then break end
+        if object:IsA("Model") or object:IsA("BasePart") then
+            if not heavenExcluded(object) and (not character or not object:IsDescendantOf(character)) then
+                local kind = heavenCandidateType(object, coins)
+                if kind then
+                    -- A named model is one breakable; don't click each of its parts.
+                    local parent = object.Parent
+                    if not (object:IsA("BasePart") and parent and parent:IsA("Model")
+                        and heavenCandidateType(parent, coins) ~= nil) then
+                        local position = heavenPosition(object)
+                        local distance = heavenDistance(position, origin)
+                        if distance and distance <= maxRadius and distance >= 2 then
+                            local sizeAllowed = true
+                            if object:IsA("Model") and type(object.GetBoundingBox) == "function" then
+                                local boxOk, _, size = pcall(object.GetBoundingBox, object)
+                                if boxOk and size and type(size.X) == "number" then
+                                    sizeAllowed = math.max(size.X, size.Y, size.Z) <= 30
+                                end
+                            end
+                            if sizeAllowed then
+                                table.insert(targets, {
+                                    instance = object, name = tostring(object.Name),
+                                    kind = kind, position = position, distance = distance,
+                                })
+                                counts[kind] = (counts[kind] or 0) + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(targets, function(a, b)
+        if a.distance ~= b.distance then return a.distance < b.distance end
+        return a.name < b.name
+    end)
+    self.HeavenTargets = targets
+    self.HeavenScanAt = os.clock()
+    self.HeavenScanNextAt = os.clock() + 7
+    self.State.HeavenTargetCount = #targets
+    local summary = {}
+    for _, kind in ipairs({ "Vault", "Gift", "Chest", "Coin", "Crate" }) do
+        if counts[kind] then table.insert(summary, kind .. "=" .. tostring(counts[kind])) end
+    end
+    self.State.HeavenScanStatus = "Scan: " .. tostring(#targets)
+        .. " nearby named/tagged objects (" .. (if #summary > 0 then table.concat(summary, ", ") else "none") .. ")"
+        .. "; inspected " .. tostring(math.min(reviewed, 40000)) .. " descendants"
+        .. (if reviewed > 40000 then " (scan capped)" else "")
+    if #targets == 0 then
+        self.State.HeavenSweepStatus =
+            "0 identifiable small breakables. No clicks will be sent. Game objects may be unnamed or not replicated."
+    end
+    self:Publish()
+    return true, self.State.HeavenScanStatus
+end
+
+function Runtime:StartHeavenSweep()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" or type(mousemoveabs) ~= "function" then
+        self.State.LastError = "Targeted AutoFarm requires mouse1click() AND mousemoveabs() in this executor."
+        self:Publish()
+        return false, self.State.LastError
+    end
+    self.Options.HeavenIslandSweep = true
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.HeavenSweepNextAt = 0
+    self.HeavenSweepPending = nil
+    -- Each object can be retried after a cooldown, even if the same instance
+    -- remains in the Workspace after a click.
+    self.HeavenSweepClicked = setmetatable({}, { __mode = "k" })
+    self.HeavenSweepMismatches = 0
+    self.State.HeavenSweepMode = "Object targeting with mouse-hit verification; B to toggle"
+    self.State.Status = "Heaven Island target AutoFarm running (input-only; no Get Coins)"
+    self.State.LastError = ""
+    self:ScanHeavenTargets()
+    self.State.HeavenSweepStatus = if #self.HeavenTargets > 0
+        then "Finding visible small targets; giant chest names excluded"
+        else "Waiting for identifiable local small breakables (0 found)"
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenSweep()
+    self.Options.HeavenIslandSweep = false
+    self.HeavenSweepNextAt, self.HeavenSweepPending = nil, nil
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenSweep()
+    if not self.Options.HeavenIslandSweep then return end
+    local now = os.clock()
+    if now >= (self.HeavenScanNextAt or 0) then self:ScanHeavenTargets() end
+    if now < (self.HeavenSweepNextAt or 0) then return end
+    if type(mouse1click) ~= "function" or type(mousemoveabs) ~= "function" then
+        self.State.LastError = "Automatic target clicking unsupported by this executor."
+        self:StopHeavenSweep()
+        return
+    end
+    if type(isrbxactive) == "function" then
+        local ok, focused = pcall(isrbxactive)
+        if not ok or focused ~= true then
+            self.HeavenSweepNextAt = now + 1
+            self.State.HeavenSweepStatus = "Paused: Roblox is not focused"
+            return
+        end
+    end
+    local okService, inputService = pcall(function() return game:GetService("UserInputService") end)
+    if okService and inputService and type(inputService.GetFocusedTextBox) == "function" then
+        local okInput, box = pcall(inputService.GetFocusedTextBox, inputService)
+        if okInput and box then self.HeavenSweepNextAt = now + 1; return end
+    end
+    local camera, pending = workspace.CurrentCamera, self.HeavenSweepPending
+    local viewport = camera and camera.ViewportSize
+    if not camera or not viewport or type(camera.WorldToViewportPoint) ~= "function"
+        or type(viewport.X) ~= "number" or type(viewport.Y) ~= "number" then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "Waiting for usable camera projection"
+        return
+    end
+    if pending then
+        if now < pending.clickAt then return end
+        self.HeavenSweepPending = nil
+        local object = pending.instance
+        if not object:IsDescendantOf(workspace) then return end
+        local readyAt = self.HeavenSweepClicked[object] or 0
+        if now < readyAt then return end
+        -- Validate projected aim AFTER moving the cursor, not just the object's old coordinates.
+        -- This catches viewport / executor coordinate mismatches and UI overlays.
+        local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
+        local hit = if mouseOk and mouse then mouse.Target else nil
+        local matchesTarget = hit ~= nil
+            and (hit == object or (object:IsA("Model") and hit:IsDescendantOf(object)))
+        if not matchesTarget then
+            self.HeavenSweepMismatches = (self.HeavenSweepMismatches or 0) + 1
+            self.HeavenSweepClicked[object] = now + 1
+            self.HeavenSweepNextAt = now + 0.35
+            self.State.HeavenSweepStatus = "Skipped off-target cursor for " .. pending.kind
+                .. " (" .. tostring(self.HeavenSweepMismatches) .. " mismatches); no click sent"
+            -- Keep running; scan again when local models change.
+            self:Publish()
+            return
+        end
+        local clicked, message = pcall(mouse1click)
+        if not clicked then
+            self.State.LastError = "Targeted click failed: " .. tostring(message)
+            self:StopHeavenSweep()
+            return
+        end
+        self.HeavenSweepClicked[object] = now + math.max(3, (self.Options.FarmInterval or 0.75) * 3)
+        self.State.HeavenSweepClicks = (self.State.HeavenSweepClicks or 0) + 1
+        self.State.HeavenSweepStatus = "Clicked verified " .. pending.kind .. ": " .. pending.name
+            .. " (#" .. tostring(self.State.HeavenSweepClicks) .. "; rewards unverified)"
+        self.HeavenSweepNextAt = now + math.clamp(self.Options.FarmInterval or 0.75, 0.4, 5)
+        self:Publish()
+        return
+    end
+    local candidates = self.HeavenTargets or {}
+    if #candidates == 0 then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "No identifiable small breakables; waiting for the next scan, no random clicks"
+        return
+    end
+    local chosen, chosenPoint
+    for _, target in ipairs(candidates) do
+        if now >= (self.HeavenSweepClicked[target.instance] or 0)
+            and target.instance:IsDescendantOf(workspace) then
+            local projected, point, visible = pcall(camera.WorldToViewportPoint, camera, target.position)
+            if projected and visible and point and type(point.Z) == "number" and point.Z > 0
+                and point.X >= 35 and point.X <= viewport.X * 0.63
+                and point.Y >= 110 and point.Y <= viewport.Y * 0.9 then
+                -- Do not click a target obstructed by another world object.
+                local clear = true
+                if type(workspace.Raycast) == "function" and camera.CFrame then
+                    local rayOk, hit = pcall(workspace.Raycast, workspace,
+                        camera.CFrame.Position, target.position - camera.CFrame.Position)
+                    if rayOk and hit and hit.Instance then
+                        clear = hit.Instance == target.instance
+                            or hit.Instance:IsDescendantOf(target.instance)
+                    end
+                end
+                if clear then chosen, chosenPoint = target, point; break end
+            end
+        end
+    end
+    if not chosen then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "Scanned " .. tostring(#candidates)
+            .. " objects; waiting for cooldown or a visible unblocked target"
+        return
+    end
+    local moved, message = pcall(mousemoveabs, math.floor(chosenPoint.X), math.floor(chosenPoint.Y))
+    if not moved then
+        self.State.LastError = "Targeted mouse movement failed: " .. tostring(message)
+        self:StopHeavenSweep()
+        return
+    end
+    self.HeavenSweepPending = {
+        instance = chosen.instance, position = chosen.position, kind = chosen.kind,
+        name = chosen.name, clickAt = now + 0.20,
+    }
+    self.HeavenSweepNextAt = now + 0.20
+    self.State.HeavenSweepStatus = "Aiming at " .. chosen.kind .. ": " .. chosen.name
 end
 
 function Runtime:StopNavigation()
@@ -2232,7 +2875,7 @@ function Runtime:PrepareCare()
     self.Jobs:cancel("care")
     self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
-        return self.Care:Connect(activeJob)
+        return self.Care:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, result)
         local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
         self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
@@ -2253,6 +2896,21 @@ function Runtime:LivingCharacter()
         or type(humanoid.Health) ~= "number" or not (humanoid.Health > 0)
         or not root or root.Parent ~= character then return nil end
     return character, humanoid, root
+end
+
+function Runtime:InspectSave()
+    if not self.Alive then return false, "Suite unloaded." end
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:InspectSave(activeJob)
+    end, function(ok, inspected)
+        self.State.CareStatus = if ok and inspected
+            then "Save layout inspected; see Status or Copy diagnostics" else "Save inspection unavailable; see Last Error"
+        if not ok then self.State.LastError = "Save inspection: " .. tostring(inspected) end
+        self:Publish()
+    end)
+    if not started then return false, "Pet worker busy; no overlapping Save.Get read." end
+    self:Publish()
+    return true
 end
 
 function Runtime:StartCare(key, manual)
@@ -2413,6 +3071,8 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
+    self:StepHeavenSweep()
+    self:StepHeavenChest()
     self:StepCare()
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
         or (self.MachineJourney and self.MachineJourney())) then
@@ -2585,11 +3245,22 @@ function Runtime:SetOption(key, value)
         return false, self.Adapter.Reason
     end
     if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
+    if key == "ModulePathMode" and (self.Jobs:busy("connect") or self.Jobs:busy("care")
+        or self.Ready or self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow) then
+        return false, "Stop and rejoin before switching module paths; do not overlap native module calls."
+    end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
+    if key == "HeavenIslandSweep" and parsed then
+        return false, "Use START Heaven Island autofarm; do not use the legacy network toggle."
+    end
+    if key == "HeavenChestAssist" and not parsed then
+        self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+        self.State.ChestStatus = "Stopped"
+    end
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
@@ -2646,6 +3317,11 @@ function Runtime:StopAll()
     self:StopNavigation()
     self.LastAssignment = nil
     self.NextAt = {}
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.State.ChestStatus = "Stopped"
+    self.HeavenSweepNextAt = nil
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
+    self.HeavenSweepPending = nil
     for key, value in pairs(self.Options) do
         if type(value) == "boolean" then self.Options[key] = false end
     end
@@ -2672,6 +3348,20 @@ function Runtime:InspectEnvironment()
     return ready, message
 end
 
+function Runtime:InspectCoinModels()
+    if not self.Alive then return false, "Suite unloaded." end
+    local ok, inspected, report = pcall(function() return self.Adapter:InspectCoinModels() end)
+    if not ok then
+        report, inspected = tostring(inspected), false
+    end
+    self.State.Status = if inspected
+        then "Local coin models inspected; farming still requires a verified protocol"
+        else "Local coin inspection unavailable"
+    if not inspected then self.State.LastError = tostring(report) end
+    self:Publish()
+    return inspected, report
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
@@ -2688,7 +3378,7 @@ function Runtime:Reconnect()
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
-        return self.Adapter:Connect(activeJob)
+        return self.Adapter:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
@@ -2712,6 +3402,15 @@ function Runtime:Diagnostics()
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
         "Navigation stage: " .. tostring(self.Navigator.Stage or "not started"),
         "Pet operation status: " .. tostring(self.State.CareStatus),
+        "Heaven chest input assist: " .. tostring(self.State.ChestStatus or "off")
+            .. "; attempted clicks=" .. tostring(self.State.ChestClicks or 0),
+        "Heaven Island target scan: " .. tostring(self.State.HeavenScanStatus or "not scanned")
+            .. "; identifiable targets=" .. tostring(self.State.HeavenTargetCount or 0),
+        "Heaven Island AutoFarm (B toggle): " .. tostring(self.State.HeavenSweepStatus or "off")
+            .. "; clicks attempted=" .. tostring(self.State.HeavenSweepClicks or 0)
+            .. "; off-target skips=" .. tostring(self.HeavenSweepMismatches or 0)
+            .. "; input mode=" .. tostring(self.State.HeavenSweepMode or "not started"),
+        "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
@@ -2724,8 +3423,15 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "ScanHeavenTargets" then return self:ScanHeavenTargets()
+    elseif action == "StartHeavenSweep" then return self:StartHeavenSweep()
+    elseif action == "StopHeavenSweep" then return self:StopHeavenSweep()
+    elseif action == "ArmHeavenChest" then return self:ArmHeavenChest()
+    elseif action == "StopHeavenChest" then return self:StopHeavenChest()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
+    elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "InspectSave" then return self:InspectSave()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
         local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])

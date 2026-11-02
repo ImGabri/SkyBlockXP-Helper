@@ -245,6 +245,35 @@ assert(nativeCalls == 1, "public facade loaded internal modules separately")
 contains(adapter.Report, "ReplicatedStorage.Library")
 ''')
 
+    def test_explicit_direct_mode_skips_hanging_facade_and_optional_world(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+client.ClassName = "ModuleScript"
+exports[library] = { Network = {} } -- direct mode must not read this facade
+local adapter = PetSim99.new():Connect(nil, "Direct")
+assert(adapter.Supported.AutoFarm, adapter.Reason)
+assert(nativeCalls == 2, "Direct mode must load only Network and PetCmds for farm probe")
+contains(adapter.Report, "Module path mode: Direct")
+assert(#calls > 0 and calls[1].command == "Get Coins")
+''')
+
+    def test_direct_module_loader_reports_suspended_step_without_fallback(self):
+        self.run_case('''
+library.ClassName = "ModuleScript"
+client.ClassName = "ModuleScript"
+local original = require
+require = function(module)
+    if module == networkModule then coroutine.yield("network loading") end
+    return original(module)
+end
+local adapter = PetSim99.new()
+local worker = coroutine.create(function() adapter:Connect(nil, "Direct") end)
+assert(coroutine.resume(worker))
+contains(adapter.Report, "Loading Library.Client.Network ModuleScript directly")
+assert(#calls == 0 and nativeCalls == 0, "loading should not send a remote or fall back")
+assert(coroutine.close(worker))
+''')
+
     def test_original_game_module_loader_is_preferred_when_available(self):
         self.run_case('''
 library.ClassName = "ModuleScript"
@@ -367,6 +396,29 @@ exports[library] = { Network = proxy, PetCmds = petCmds, WorldCmds = staleWorld 
 adapter:Connect()
 local snapshot = adapter:Snapshot()
 assert(adapter.Supported.AutoFarm and #snapshot.Candidates == 1, "stale facade replaced current area filtering")
+''')
+
+    def test_local_preflight_blocks_missing_coin_models_without_networking(self):
+        self.run_case('''
+coins.Children = {}
+local adapter = PetSim99.new()
+local ready, message = adapter:Inspect()
+assert(not ready)
+contains(message, "No loaded coin models")
+assert(nativeCalls == 0 and #calls == 0, "empty coin area attempted a module or network call")
+assert(not adapter.Supported.AutoFarm)
+''')
+
+    def test_local_coin_inspector_reads_models_without_modules_or_network(self):
+        self.run_case('''
+local adapter = PetSim99.new()
+local ok, report = adapter:InspectCoinModels()
+assert(ok and string.find(report, "loaded models=1", 1, true), report)
+contains(report, "valid position markers=1")
+contains(report, "coin1 [Coin]")
+assert(nativeCalls == 0 and #calls == 0, "local inspector attempted a module or remote call")
+assert(not adapter.Supported.AutoFarm, "read-only inspection enabled farming without protocol")
+contains(adapter.Report, "Local coin inspection")
 ''')
 
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):

@@ -33,6 +33,8 @@ function Runtime.new(player, parent)
     })
     table.insert(self.Connections, player.CharacterAdded:Connect(function(character)
         for _, key in ipairs({ "AutoFarm", "AutoCollectOrbs", "AutoCollectLootbags" }) do self.Jobs:cancel(key) end
+        if self.Options.HeavenChestAssist then self:StopHeavenChest() end
+        if self.Options.HeavenIslandSweep then self:StopHeavenSweep() end
         self.Jobs:cancel("care")
         self.Navigator:Stop()
         self:StopNavigation()
@@ -60,6 +62,25 @@ function Runtime.new(player, parent)
             self:Publish()
         end
     end))
+    -- B toggles only the local Heaven Island input farm. Respect UI text input.
+    local inputOk, input = pcall(function() return game:GetService("UserInputService") end)
+    if inputOk and input and input.InputBegan then
+        table.insert(self.Connections, input.InputBegan:Connect(function(key, processed)
+            if processed or not self.Alive or not key or not Enum or not Enum.KeyCode
+                or key.KeyCode ~= Enum.KeyCode.B then return end
+            local focusOk, focused = pcall(input.GetFocusedTextBox, input)
+            if focusOk and focused then return end
+            if self.Options.HeavenIslandSweep then
+                self:StopHeavenSweep()
+            else
+                local started, reason = self:StartHeavenSweep()
+                if not started then
+                    self.State.LastError = "B AutoFarm toggle: " .. tostring(reason)
+                    self:Publish()
+                end
+            end
+        end))
+    end
     table.insert(self.Connections, game:GetService("TeleportService").TeleportInitFailed:Connect(function(who, _, message)
         if who == player and self.Alive then
             self.State.LastError = "Rejoin failed: " .. tostring(message)
@@ -67,6 +88,12 @@ function Runtime.new(player, parent)
         end
     end))
     self:Publish()
+    -- Initial local scan runs automatically on load, with no game module or remote calls.
+    local scanOk, scanMessage = pcall(function() self:ScanHeavenTargets() end)
+    if not scanOk then
+        self.State.HeavenScanStatus = "Initial local scan unavailable: " .. tostring(scanMessage)
+        self:Publish()
+    end
     self.Pulse = task.spawn(function()
         while self.Alive do
             local ok, message = pcall(function()
@@ -82,6 +109,412 @@ function Runtime.new(player, parent)
         end
     end)
     return self
+end
+
+-- Heaven Island chest input helper. Does not use Save.Get, game remotes or
+-- the legacy Get Coins protocol. It clicks once per captured BasePart instance
+-- and waits until that part disappears before clicking a matching replacement.
+-- The actual game-side response is not confirmed by a synthetic click.
+function Runtime:ArmHeavenChest()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" then
+        return false, "This executor has no mouse1click() support."
+    end
+    self.Options.HeavenChestAssist = true
+    self.ChestArmAt = os.clock() + 3
+    self.ChestClickedPart, self.ChestAnchorPosition = nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Move your cursor over the Heaven chest: capturing in 3 seconds."
+    self.State.LastError = ""
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenChest()
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.ChestAnchorName, self.ChestAnchorParent = nil, nil
+    self.State.ChestStatus = "Stopped"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenChest()
+    if not self.Options.HeavenChestAssist then return end
+    local character = self.Player.Character
+    if not character or not character.Parent then return end
+    if type(mouse1click) ~= "function" then
+        self.State.LastError = "Heaven chest input unsupported: mouse1click() is missing."
+        self:StopHeavenChest()
+        return
+    end
+    local mouse = self.Player:GetMouse()
+    local target = mouse and mouse.Target
+    local function usable(part)
+        return part and part:IsA("BasePart") and part:IsDescendantOf(workspace)
+            and not part:IsDescendantOf(character)
+    end
+    if self.ChestArmAt then
+        if os.clock() < self.ChestArmAt then return end
+        self.ChestArmAt = nil
+        if not usable(target) then
+            self.State.LastError = "No world BasePart under cursor. Aim at the chest when arming."
+            self:StopHeavenChest()
+            return
+        end
+        self.ChestAnchorName = target.Name
+        self.ChestAnchorParent = target.Parent and target.Parent.Name or ""
+        self.ChestAnchorPosition = target.Position
+        self.State.ChestStatus = "Captured " .. target.Name .. "; initial click pending"
+    end
+    if not self.ChestAnchorPosition then return end
+    if self.ChestClickedPart then
+        if self.ChestClickedPart:IsDescendantOf(workspace) then return end
+        self.ChestClickedPart = nil
+        self.State.ChestStatus = "Chest disappeared; waiting for matching respawn under cursor"
+        self:Publish()
+    end
+    if not usable(target) or target.Name ~= self.ChestAnchorName
+        or (target.Parent and target.Parent.Name or "") ~= self.ChestAnchorParent
+        or (target.Position - self.ChestAnchorPosition).Magnitude > 12 then return end
+    if type(isrbxactive) == "function" then
+        local ok, active = pcall(isrbxactive)
+        if not ok or not active then return end
+    end
+    local ok, result = pcall(mouse1click)
+    if not ok then
+        self.State.LastError = "Heaven chest click failed: " .. tostring(result)
+        self:StopHeavenChest()
+        return
+    end
+    self.ChestClickedPart = target
+    self.State.ChestClicks = (self.State.ChestClicks or 0) + 1
+    self.State.ChestStatus = "Clicked once; waiting for chest to disappear (rewards unverified)"
+    self:Publish()
+end
+
+-- Object-targeted Heaven Island input farm.
+-- Works only with visible, recognizably named/tagged individual breakables.
+-- Never guesses remotes, fabricates data, fires network events or sweeps blind pixels.
+local HEAVEN_CATEGORIES = {
+    { "Vault", { "vault", "safe" } },
+    { "Gift", { "gift", "present" } },
+    { "Chest", { "chest" } },
+    { "Coin", { "coin", "pile", "diamond" } },
+    { "Crate", { "crate", "breakable" } },
+}
+local HEAVEN_FORBIDDEN = {
+    "heavens gate", "heaven's gate", "grand heaven", "angel chest", "giant",
+    "big chest", "boss chest", "massive", "titanic", "huge chest", "mega chest",
+}
+local HEAVEN_IGNORE = {
+    "__debris", "__mapdebris", "exclusiveeggs", "exclusiveeggpets", "pets",
+    "orbs", "lootbags", "players", "camera",
+}
+local function containsAny(name, terms)
+    for _, term in ipairs(terms) do
+        if string.find(name, term, 1, true) then return true end
+    end
+    return false
+end
+local function heavenKind(name)
+    name = string.lower(tostring(name or ""))
+    for _, definition in ipairs(HEAVEN_CATEGORIES) do
+        if containsAny(name, definition[2]) then return definition[1] end
+    end
+    return nil
+end
+local function heavenPosition(object)
+    if object:IsA("BasePart") then return object.Position end
+    if object:IsA("Model") then
+        local ok, pivot = pcall(object.GetPivot, object)
+        if ok and pivot then return pivot.Position end
+        local part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+        return part and part.Position
+    end
+    return nil
+end
+local function heavenDistance(a, b)
+    if not a or not b then return nil end
+    local ok, distance = pcall(function() return (a - b).Magnitude end)
+    if ok and type(distance) == "number" then return distance end
+    -- Also accept numeric XYZ vectors from benign test doubles and proxy values.
+    local valid = type(a.X) == "number" and type(a.Y) == "number" and type(a.Z) == "number"
+        and type(b.X) == "number" and type(b.Y) == "number" and type(b.Z) == "number"
+    if not valid then return nil end
+    local dx, dy, dz = a.X - b.X, a.Y - b.Y, a.Z - b.Z
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+local function heavenExcluded(object)
+    local depth, node = 0, object
+    while node and node ~= workspace and depth < 14 do
+        local label = string.lower(tostring(node.Name or ""))
+        if containsAny(label, HEAVEN_FORBIDDEN) then return true end
+        -- Never target player pets, pick-ups, debris or visual effects.
+        if depth > 0 and containsAny(label, HEAVEN_IGNORE) then return true end
+        node, depth = node.Parent, depth + 1
+    end
+    return false
+end
+local function heavenCandidateType(object, coinsFolder)
+    if object:IsA("Model") and coinsFolder and object.Parent == coinsFolder then
+        return "Coin"
+    end
+    local kind = heavenKind(object.Name)
+    if kind then return kind end
+    if type(object.GetTags) == "function" then
+        local ok, tags = pcall(object.GetTags, object)
+        if ok and type(tags) == "table" then
+            for _, tag in ipairs(tags) do
+                kind = heavenKind(tag)
+                if kind then return kind end
+            end
+        end
+    end
+    if type(object.GetAttribute) == "function" then
+        for _, attribute in ipairs({ "BreakableType", "CoinType", "Type" }) do
+            local ok, value = pcall(object.GetAttribute, object, attribute)
+            if ok and type(value) == "string" then
+                kind = heavenKind(value)
+                if kind then return kind end
+            end
+        end
+    end
+    return nil
+end
+
+function Runtime:ScanHeavenTargets()
+    if not self.Alive then return false, "Suite unloaded." end
+    local character = self.Player.Character
+    local root = character and character:FindFirstChild("HumanoidRootPart")
+    local origin = root and root.Position
+    local getAll = workspace.GetDescendants
+    if type(getAll) ~= "function" then
+        self.HeavenTargets = {}
+        self.State.HeavenScanStatus = "Workspace listing unavailable; 0 detected targets"
+        self.State.HeavenTargetCount = 0
+        self:Publish()
+        return false, self.State.HeavenScanStatus
+    end
+    local ok, objects = pcall(getAll, workspace)
+    if not ok or type(objects) ~= "table" then
+        self.HeavenTargets = {}
+        self.State.HeavenScanStatus = "Unable to read local Workspace descendants"
+        self.State.HeavenTargetCount = 0
+        self:Publish()
+        return false, self.State.HeavenScanStatus
+    end
+    local things = workspace:FindFirstChild("__THINGS")
+    local coins = things and things:FindFirstChild("Coins")
+    local maxRadius = math.min(160, self.Options.Radius or 160)
+    local counts, targets, reviewed = {}, {}, 0
+    for _, object in ipairs(objects) do
+        reviewed += 1
+        if reviewed > 40000 then break end
+        if object:IsA("Model") or object:IsA("BasePart") then
+            if not heavenExcluded(object) and (not character or not object:IsDescendantOf(character)) then
+                local kind = heavenCandidateType(object, coins)
+                if kind then
+                    -- A named model is one breakable; don't click each of its parts.
+                    local parent = object.Parent
+                    if not (object:IsA("BasePart") and parent and parent:IsA("Model")
+                        and heavenCandidateType(parent, coins) ~= nil) then
+                        local position = heavenPosition(object)
+                        local distance = heavenDistance(position, origin)
+                        if distance and distance <= maxRadius and distance >= 2 then
+                            local sizeAllowed = true
+                            if object:IsA("Model") and type(object.GetBoundingBox) == "function" then
+                                local boxOk, _, size = pcall(object.GetBoundingBox, object)
+                                if boxOk and size and type(size.X) == "number" then
+                                    sizeAllowed = math.max(size.X, size.Y, size.Z) <= 30
+                                end
+                            end
+                            if sizeAllowed then
+                                table.insert(targets, {
+                                    instance = object, name = tostring(object.Name),
+                                    kind = kind, position = position, distance = distance,
+                                })
+                                counts[kind] = (counts[kind] or 0) + 1
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    table.sort(targets, function(a, b)
+        if a.distance ~= b.distance then return a.distance < b.distance end
+        return a.name < b.name
+    end)
+    self.HeavenTargets = targets
+    self.HeavenScanAt = os.clock()
+    self.HeavenScanNextAt = os.clock() + 7
+    self.State.HeavenTargetCount = #targets
+    local summary = {}
+    for _, kind in ipairs({ "Vault", "Gift", "Chest", "Coin", "Crate" }) do
+        if counts[kind] then table.insert(summary, kind .. "=" .. tostring(counts[kind])) end
+    end
+    self.State.HeavenScanStatus = "Scan: " .. tostring(#targets)
+        .. " nearby named/tagged objects (" .. (if #summary > 0 then table.concat(summary, ", ") else "none") .. ")"
+        .. "; inspected " .. tostring(math.min(reviewed, 40000)) .. " descendants"
+        .. (if reviewed > 40000 then " (scan capped)" else "")
+    if #targets == 0 then
+        self.State.HeavenSweepStatus =
+            "0 identifiable small breakables. No clicks will be sent. Game objects may be unnamed or not replicated."
+    end
+    self:Publish()
+    return true, self.State.HeavenScanStatus
+end
+
+function Runtime:StartHeavenSweep()
+    if not self.Alive then return false, "Suite unloaded." end
+    if type(mouse1click) ~= "function" or type(mousemoveabs) ~= "function" then
+        self.State.LastError = "Targeted AutoFarm requires mouse1click() AND mousemoveabs() in this executor."
+        self:Publish()
+        return false, self.State.LastError
+    end
+    self.Options.HeavenIslandSweep = true
+    self.Options.HeavenChestAssist = false
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.HeavenSweepNextAt = 0
+    self.HeavenSweepPending = nil
+    -- Each object can be retried after a cooldown, even if the same instance
+    -- remains in the Workspace after a click.
+    self.HeavenSweepClicked = setmetatable({}, { __mode = "k" })
+    self.HeavenSweepMismatches = 0
+    self.State.HeavenSweepMode = "Object targeting with mouse-hit verification; B to toggle"
+    self.State.Status = "Heaven Island target AutoFarm running (input-only; no Get Coins)"
+    self.State.LastError = ""
+    self:ScanHeavenTargets()
+    self.State.HeavenSweepStatus = if #self.HeavenTargets > 0
+        then "Finding visible small targets; giant chest names excluded"
+        else "Waiting for identifiable local small breakables (0 found)"
+    self:Publish()
+    return true
+end
+
+function Runtime:StopHeavenSweep()
+    self.Options.HeavenIslandSweep = false
+    self.HeavenSweepNextAt, self.HeavenSweepPending = nil, nil
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
+    self:Publish()
+    return true
+end
+
+function Runtime:StepHeavenSweep()
+    if not self.Options.HeavenIslandSweep then return end
+    local now = os.clock()
+    if now >= (self.HeavenScanNextAt or 0) then self:ScanHeavenTargets() end
+    if now < (self.HeavenSweepNextAt or 0) then return end
+    if type(mouse1click) ~= "function" or type(mousemoveabs) ~= "function" then
+        self.State.LastError = "Automatic target clicking unsupported by this executor."
+        self:StopHeavenSweep()
+        return
+    end
+    if type(isrbxactive) == "function" then
+        local ok, focused = pcall(isrbxactive)
+        if not ok or focused ~= true then
+            self.HeavenSweepNextAt = now + 1
+            self.State.HeavenSweepStatus = "Paused: Roblox is not focused"
+            return
+        end
+    end
+    local okService, inputService = pcall(function() return game:GetService("UserInputService") end)
+    if okService and inputService and type(inputService.GetFocusedTextBox) == "function" then
+        local okInput, box = pcall(inputService.GetFocusedTextBox, inputService)
+        if okInput and box then self.HeavenSweepNextAt = now + 1; return end
+    end
+    local camera, pending = workspace.CurrentCamera, self.HeavenSweepPending
+    local viewport = camera and camera.ViewportSize
+    if not camera or not viewport or type(camera.WorldToViewportPoint) ~= "function"
+        or type(viewport.X) ~= "number" or type(viewport.Y) ~= "number" then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "Waiting for usable camera projection"
+        return
+    end
+    if pending then
+        if now < pending.clickAt then return end
+        self.HeavenSweepPending = nil
+        local object = pending.instance
+        if not object:IsDescendantOf(workspace) then return end
+        local readyAt = self.HeavenSweepClicked[object] or 0
+        if now < readyAt then return end
+        -- Validate projected aim AFTER moving the cursor, not just the object's old coordinates.
+        -- This catches viewport / executor coordinate mismatches and UI overlays.
+        local mouseOk, mouse = pcall(function() return self.Player:GetMouse() end)
+        local hit = if mouseOk and mouse then mouse.Target else nil
+        local matchesTarget = hit ~= nil
+            and (hit == object or (object:IsA("Model") and hit:IsDescendantOf(object)))
+        if not matchesTarget then
+            self.HeavenSweepMismatches = (self.HeavenSweepMismatches or 0) + 1
+            self.HeavenSweepClicked[object] = now + 1
+            self.HeavenSweepNextAt = now + 0.35
+            self.State.HeavenSweepStatus = "Skipped off-target cursor for " .. pending.kind
+                .. " (" .. tostring(self.HeavenSweepMismatches) .. " mismatches); no click sent"
+            -- Keep running; scan again when local models change.
+            self:Publish()
+            return
+        end
+        local clicked, message = pcall(mouse1click)
+        if not clicked then
+            self.State.LastError = "Targeted click failed: " .. tostring(message)
+            self:StopHeavenSweep()
+            return
+        end
+        self.HeavenSweepClicked[object] = now + math.max(3, (self.Options.FarmInterval or 0.75) * 3)
+        self.State.HeavenSweepClicks = (self.State.HeavenSweepClicks or 0) + 1
+        self.State.HeavenSweepStatus = "Clicked verified " .. pending.kind .. ": " .. pending.name
+            .. " (#" .. tostring(self.State.HeavenSweepClicks) .. "; rewards unverified)"
+        self.HeavenSweepNextAt = now + math.clamp(self.Options.FarmInterval or 0.75, 0.4, 5)
+        self:Publish()
+        return
+    end
+    local candidates = self.HeavenTargets or {}
+    if #candidates == 0 then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "No identifiable small breakables; waiting for the next scan, no random clicks"
+        return
+    end
+    local chosen, chosenPoint
+    for _, target in ipairs(candidates) do
+        if now >= (self.HeavenSweepClicked[target.instance] or 0)
+            and target.instance:IsDescendantOf(workspace) then
+            local projected, point, visible = pcall(camera.WorldToViewportPoint, camera, target.position)
+            if projected and visible and point and type(point.Z) == "number" and point.Z > 0
+                and point.X >= 35 and point.X <= viewport.X * 0.63
+                and point.Y >= 110 and point.Y <= viewport.Y * 0.9 then
+                -- Do not click a target obstructed by another world object.
+                local clear = true
+                if type(workspace.Raycast) == "function" and camera.CFrame then
+                    local rayOk, hit = pcall(workspace.Raycast, workspace,
+                        camera.CFrame.Position, target.position - camera.CFrame.Position)
+                    if rayOk and hit and hit.Instance then
+                        clear = hit.Instance == target.instance
+                            or hit.Instance:IsDescendantOf(target.instance)
+                    end
+                end
+                if clear then chosen, chosenPoint = target, point; break end
+            end
+        end
+    end
+    if not chosen then
+        self.HeavenSweepNextAt = now + 1
+        self.State.HeavenSweepStatus = "Scanned " .. tostring(#candidates)
+            .. " objects; waiting for cooldown or a visible unblocked target"
+        return
+    end
+    local moved, message = pcall(mousemoveabs, math.floor(chosenPoint.X), math.floor(chosenPoint.Y))
+    if not moved then
+        self.State.LastError = "Targeted mouse movement failed: " .. tostring(message)
+        self:StopHeavenSweep()
+        return
+    end
+    self.HeavenSweepPending = {
+        instance = chosen.instance, position = chosen.position, kind = chosen.kind,
+        name = chosen.name, clickAt = now + 0.20,
+    }
+    self.HeavenSweepNextAt = now + 0.20
+    self.State.HeavenSweepStatus = "Aiming at " .. chosen.kind .. ": " .. chosen.name
 end
 
 function Runtime:StopNavigation()
@@ -128,7 +561,7 @@ function Runtime:PrepareCare()
     self.Jobs:cancel("care")
     self.Navigator:Stop()
     local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
-        return self.Care:Connect(activeJob)
+        return self.Care:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, result)
         local loaded = ok and (self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow)
         self.State.CareStatus = if loaded then self.Care.Reason else "Pet tools unavailable: " .. tostring(self.Care.Reason)
@@ -149,6 +582,21 @@ function Runtime:LivingCharacter()
         or type(humanoid.Health) ~= "number" or not (humanoid.Health > 0)
         or not root or root.Parent ~= character then return nil end
     return character, humanoid, root
+end
+
+function Runtime:InspectSave()
+    if not self.Alive then return false, "Suite unloaded." end
+    local started = self.Jobs:start("care", Config.RequestTimeout, function(activeJob)
+        return self.Care:InspectSave(activeJob)
+    end, function(ok, inspected)
+        self.State.CareStatus = if ok and inspected
+            then "Save layout inspected; see Status or Copy diagnostics" else "Save inspection unavailable; see Last Error"
+        if not ok then self.State.LastError = "Save inspection: " .. tostring(inspected) end
+        self:Publish()
+    end)
+    if not started then return false, "Pet worker busy; no overlapping Save.Get read." end
+    self:Publish()
+    return true
 end
 
 function Runtime:StartCare(key, manual)
@@ -309,6 +757,8 @@ function Runtime:StepCare()
 end
 
 function Runtime:Step()
+    self:StepHeavenSweep()
+    self:StepHeavenChest()
     self:StepCare()
     if self.Jobs:busy("care") and (self.Options.MachineTravelMode == "Walk"
         or (self.MachineJourney and self.MachineJourney())) then
@@ -481,11 +931,22 @@ function Runtime:SetOption(key, value)
         return false, self.Adapter.Reason
     end
     if parsed == true and self.Care.Supported[key] == false then return false, self.Care.Reason end
+    if key == "ModulePathMode" and (self.Jobs:busy("connect") or self.Jobs:busy("care")
+        or self.Ready or self.Care.Supported.AutoHatch or self.Care.Supported.AutoGold or self.Care.Supported.AutoRainbow) then
+        return false, "Stop and rejoin before switching module paths; do not overlap native module calls."
+    end
     if key == "AntiIdle" and parsed and self.AntiIdleUnavailable then
         return false, "This executor rejected idle input in this session."
     end
     local previous = self.Options[key]
     self.Options[key] = parsed
+    if key == "HeavenIslandSweep" and parsed then
+        return false, "Use START Heaven Island autofarm; do not use the legacy network toggle."
+    end
+    if key == "HeavenChestAssist" and not parsed then
+        self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+        self.State.ChestStatus = "Stopped"
+    end
     if type(parsed) == "boolean" then
         if not parsed then
             self.Jobs:cancel(key)
@@ -542,6 +1003,11 @@ function Runtime:StopAll()
     self:StopNavigation()
     self.LastAssignment = nil
     self.NextAt = {}
+    self.ChestArmAt, self.ChestClickedPart, self.ChestAnchorPosition = nil, nil, nil
+    self.State.ChestStatus = "Stopped"
+    self.HeavenSweepNextAt = nil
+    self.State.HeavenSweepStatus = "Stopped (B to restart)"
+    self.HeavenSweepPending = nil
     for key, value in pairs(self.Options) do
         if type(value) == "boolean" then self.Options[key] = false end
     end
@@ -568,6 +1034,20 @@ function Runtime:InspectEnvironment()
     return ready, message
 end
 
+function Runtime:InspectCoinModels()
+    if not self.Alive then return false, "Suite unloaded." end
+    local ok, inspected, report = pcall(function() return self.Adapter:InspectCoinModels() end)
+    if not ok then
+        report, inspected = tostring(inspected), false
+    end
+    self.State.Status = if inspected
+        then "Local coin models inspected; farming still requires a verified protocol"
+        else "Local coin inspection unavailable"
+    if not inspected then self.State.LastError = tostring(report) end
+    self:Publish()
+    return inspected, report
+end
+
 function Runtime:Reconnect()
     self:StopAll()
     self.Ready = false
@@ -584,7 +1064,7 @@ function Runtime:Reconnect()
     self.State.Status = "Checking Classic Event protocol..."
     self:Publish()
     local started = self.Jobs:start("connect", Config.RequestTimeout, function(activeJob)
-        return self.Adapter:Connect(activeJob)
+        return self.Adapter:Connect(activeJob, self.Options.ModulePathMode)
     end, function(ok, message)
         self.Ready = ok and self.Adapter.Supported.AutoFarm == true
         self.State.Status = if self.Ready then "Protocol probe passed — enable a feature to test in game" else "Compatibility probe failed — see Status"
@@ -608,6 +1088,15 @@ function Runtime:Diagnostics()
         "Current pet-tools stage: " .. tostring(self.Care._phase or "not started"),
         "Navigation stage: " .. tostring(self.Navigator.Stage or "not started"),
         "Pet operation status: " .. tostring(self.State.CareStatus),
+        "Heaven chest input assist: " .. tostring(self.State.ChestStatus or "off")
+            .. "; attempted clicks=" .. tostring(self.State.ChestClicks or 0),
+        "Heaven Island target scan: " .. tostring(self.State.HeavenScanStatus or "not scanned")
+            .. "; identifiable targets=" .. tostring(self.State.HeavenTargetCount or 0),
+        "Heaven Island AutoFarm (B toggle): " .. tostring(self.State.HeavenSweepStatus or "off")
+            .. "; clicks attempted=" .. tostring(self.State.HeavenSweepClicks or 0)
+            .. "; off-target skips=" .. tostring(self.HeavenSweepMismatches or 0)
+            .. "; input mode=" .. tostring(self.State.HeavenSweepMode or "not started"),
+        "Selected module path: " .. tostring(self.Options.ModulePathMode),
         "Active workers:\n" .. self.Jobs:summary(),
         self.Adapter.Report,
         self.Care.Report,
@@ -620,8 +1109,15 @@ end
 function Runtime:Action(action)
     if action == "StopAll" then self:StopAll()
     elseif action == "Reconnect" then return self:Reconnect()
+    elseif action == "ScanHeavenTargets" then return self:ScanHeavenTargets()
+    elseif action == "StartHeavenSweep" then return self:StartHeavenSweep()
+    elseif action == "StopHeavenSweep" then return self:StopHeavenSweep()
+    elseif action == "ArmHeavenChest" then return self:ArmHeavenChest()
+    elseif action == "StopHeavenChest" then return self:StopHeavenChest()
     elseif action == "InspectEnvironment" then return self:InspectEnvironment()
+    elseif action == "InspectCoinModels" then return self:InspectCoinModels()
     elseif action == "PrepareCare" then return self:PrepareCare()
+    elseif action == "InspectSave" then return self:InspectSave()
     elseif action == "NextEgg" or action == "NextSpecies" then
         local key = if action == "NextEgg" then "EggName" else "ConversionSpecies"
         local value, caption = self.Care:NextChoice(if action == "NextEgg" then "Egg" else "Species", self.Options[key])

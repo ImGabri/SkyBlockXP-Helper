@@ -62,6 +62,8 @@ local Lighting = {
     Ambient = "original ambient", OutdoorAmbient = "original outdoor",
 }
 local workspace = { Gravity = 200 }
+function workspace:FindFirstChild() return nil end
+function workspace:IsA(kind) return kind == "Workspace" end
 local humanoid = {
     Health = 100, WalkSpeed = 17, JumpPower = 55, JumpHeight = 8, UseJumpPower = false,
 }
@@ -241,6 +243,186 @@ class RuntimeTests(unittest.TestCase):
             result = subprocess.run([str(executable), str(output)], capture_output=True, text=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("RUNTIME_TEST_OK", result.stdout)
+
+    def test_chest_cursor_assist_clicks_only_once_until_target_removed(self):
+        self.run_case('''
+local vectorMeta = { __sub = function(a, b)
+    return { Magnitude = math.abs(a.X - b.X) }
+end }
+local function chest()
+    local item = { Name = "Heaven Chest", Parent = workspace,
+        Position = setmetatable({ X = 10 }, vectorMeta) }
+    function item:IsA(kind) return kind == "BasePart" end
+    function item:IsDescendantOf(other) return self.Parent == other end
+    return item
+end
+local currentTarget = chest()
+player.GetMouse = function() return { Target = currentTarget } end
+local clicks = 0
+mouse1click = function() clicks += 1 end
+assert(runtime:Action("ArmHeavenChest"))
+assert(not runtime.Ready and adapter.NativeCalls == 0)
+runtime:Step()
+assert(clicks == 0, "clicked before the aim countdown")
+clock += 4
+runtime:Step()
+assert(clicks == 1, "first chest never clicked")
+runtime:Step()
+assert(clicks == 1, "chest was clicked again while still alive")
+local old = currentTarget
+currentTarget = chest()
+runtime:Step()
+assert(clicks == 1, "changed target was clicked before previous chest disappeared")
+old.Parent = nil
+runtime:Step()
+assert(clicks == 2, "matching respawn was not clicked")
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0, "cursor assist loaded game APIs")
+assert(runtime:Action("StopHeavenChest"))
+old = currentTarget
+old.Parent = nil
+currentTarget = chest()
+runtime:Step()
+assert(clicks == 2, "stopped assist kept clicking")
+runtime:Destroy()
+''')
+
+    def test_chest_cursor_assist_requires_input_capability(self):
+        self.run_case('''
+mouse1click = nil
+local ok, message = runtime:Action("ArmHeavenChest")
+assert(not ok and string.find(message, "mouse1click", 1, true))
+assert(not runtime.Options.HeavenChestAssist)
+runtime:Destroy()
+''')
+
+    def test_local_target_scan_runs_on_load_without_networking(self):
+        self.run_case('''
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0)
+assert(runtime.State.HeavenTargetCount == 0)
+assert(string.find(runtime.State.HeavenScanStatus, "Workspace listing unavailable", 1, true))
+runtime:Destroy()
+''')
+
+    def test_targeted_farm_selects_named_small_breakable_and_excludes_boss_chest(self):
+        self.run_case('''
+local function part(name, x)
+    local object = { Name = name, Parent = workspace, Position = { X = x, Y = 0, Z = 0 } }
+    function object:IsA(kind) return kind == "BasePart" end
+    function object:IsDescendantOf(parent) return self.Parent == parent end
+    return object
+end
+local small = part("Heaven Island Vault", 15)
+local giant = part("Heaven Island Angel Chest", 12)
+local coin = part("Heaven Island Coin Pile", 16)
+rootPart.Position = { X = 0, Y = 0, Z = 0 }
+workspace.GetDescendants = function() return { small, giant, coin } end
+workspace.CurrentCamera = {
+    ViewportSize = { X = 1200, Y = 800 },
+    WorldToViewportPoint = function(_, position)
+        return { X = position.X * 10, Y = 320, Z = 1 }, true
+    end
+}
+local moves, clicks = {}, 0
+mousemoveabs = function(x, y) table.insert(moves, {x, y}) end
+mouse1click = function() clicks += 1 end
+player.GetMouse = function() return { Target = if #moves == 1 then small else coin } end
+isrbxactive = function() return true end
+local found, report = runtime:Action("ScanHeavenTargets")
+assert(found and string.find(report, "2 nearby", 1, true), report)
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+assert(#moves == 1 and clicks == 0, "targeted input did not move before clicking")
+clock += 1
+runtime:Step()
+assert(clicks == 1, "did not click targeted breakable")
+clock += 2
+runtime:Step()
+assert(#moves == 2 and moves[2][1] ~= moves[1][1], "did not target a second individual object")
+clock += 1
+runtime:Step()
+assert(clicks == 2, "second breakable not clicked")
+clock += 2
+runtime:Step()
+assert(clicks == 2, "clicked object while still cooling down")
+clock += 4
+runtime:Step()
+assert(#moves >= 3, "cooldown should let an existing object become eligible again")
+assert(adapter.NativeCalls == 0 and care.ConnectCalls == 0)
+assert(runtime:Action("StopHeavenSweep"))
+runtime:Destroy()
+''')
+
+    def test_b_key_toggles_heaven_farm_without_toggling_while_typing(self):
+        self.run_case('''
+local inputBegan = signal()
+services.UserInputService = {
+    InputBegan = inputBegan,
+    GetFocusedTextBox = function() return nil end
+}
+-- Runtime attaches the InputBegan listener during construction.
+-- New runtime is used here so the fixture receives the new input service.
+local second = Runtime.new(player, {})
+mousemoveabs = function() end
+mouse1click = function() end
+Enum = { KeyCode = { B = "B" } }
+inputBegan:Fire({KeyCode = "B"}, false)
+assert(second.Options.HeavenIslandSweep)
+inputBegan:Fire({KeyCode = "B"}, false)
+assert(not second.Options.HeavenIslandSweep)
+inputBegan:Fire({KeyCode = "B"}, true)
+assert(not second.Options.HeavenIslandSweep)
+second:Destroy()
+runtime:Destroy()
+''')
+
+    def test_off_target_mouse_skips_click_without_stopping_farm(self):
+        self.run_case('''
+local target = { Name = "Heaven Vault", Parent = workspace, Position = { X=15, Y=0, Z=0 } }
+function target:IsA(k) return k == "BasePart" end
+function target:IsDescendantOf(p) return self.Parent == p end
+rootPart.Position = {X=0,Y=0,Z=0}
+workspace.GetDescendants = function() return {target} end
+workspace.CurrentCamera = {ViewportSize={X=1200,Y=800},
+    WorldToViewportPoint=function() return {X=200,Y=250,Z=1},true end}
+mousemoveabs = function() end
+local clicks = 0
+mouse1click = function() clicks += 1 end
+player.GetMouse = function() return { Target=nil } end
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+clock += 1
+runtime:Step()
+assert(clicks == 0 and runtime.Options.HeavenIslandSweep)
+assert(runtime.HeavenSweepMismatches >= 1)
+runtime:Destroy()
+''')
+
+    def test_zero_detected_targets_never_emits_blind_screen_clicks(self):
+        self.run_case('''
+workspace.GetDescendants = function() return {} end
+workspace.CurrentCamera = {
+    ViewportSize = { X = 1200, Y = 800 },
+    WorldToViewportPoint = function() error("no targets should be projected") end
+}
+local clicks = 0
+mousemoveabs = function() error("no targets may be clicked") end
+mouse1click = function() clicks += 1 end
+assert(runtime:Action("StartHeavenSweep"))
+assert(runtime.State.HeavenTargetCount == 0)
+for i = 1, 5 do clock += 2; runtime:Step() end
+assert(clicks == 0 and runtime.Options.HeavenIslandSweep)
+runtime:Destroy()
+''')
+
+    def test_targeted_farm_requires_both_input_primitives(self):
+        self.run_case('''
+mousemoveabs = nil
+mouse1click = function() end
+local ok, err = runtime:Action("StartHeavenSweep")
+assert(not ok and string.find(err, "mousemoveabs", 1, true))
+assert(not runtime.Options.HeavenIslandSweep)
+runtime:Destroy()
+''')
 
     def test_startup_is_passive_until_explicit_manual_reconnect(self):
         self.run_case('''
