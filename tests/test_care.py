@@ -126,6 +126,87 @@ assert(nativeCalls == 0 and #calls == 0)
 assert(coroutine.close(worker))
 ''')
 
+    def test_rejected_or_canceled_connect_keeps_the_existing_module_mode(self):
+        self.run_case('''
+facade.Save.Get=function() coroutine.yield("pending save");return save end
+care:Connect(nil,"Facade")
+local worker=coroutine.create(function() care:Hatch("Starter Egg","Single") end)
+assert(coroutine.resume(worker))
+assert(not pcall(care.Connect,care,nil,"Direct"))
+assert(care._mode=="Facade","busy rejected connect changed the live module mode")
+assert(coroutine.close(worker))
+care:Connect(function() return false end,"Direct")
+assert(care._mode=="Facade","canceled connect changed the live module mode")
+''')
+
+    def test_direct_egg_lookup_is_lazy_and_uses_its_current_operation_token(self):
+        self.run_case('''
+client.ClassName="ModuleScript"
+local saveModule=instance("Save","ModuleScript",client)
+local directoryModule=instance("Directory","ModuleScript",library)
+local worldModule=instance("WorldCmds","ModuleScript",client)
+exports[saveModule]=facade.Save
+exports[directoryModule]=directory
+exports[worldModule]=facade.WorldCmds
+exports[library]={}
+local preparing=true
+care:Connect(function() return preparing end,"Direct")
+assert(nativeCalls==4 and #calls==0,"Direct preparation eagerly loaded world or facade")
+preparing=false
+assert(care:GetEggTarget("Starter Egg")==eggModel,"egg lookup reused an expired preparation token")
+assert(nativeCalls==5 and #calls==0)
+assert(care:GetEggTarget("Starter Egg",function() return false end)==nil)
+assert(nativeCalls==5,"canceled egg lookup required another game module")
+''')
+
+    def test_save_inspector_keeps_ownership_during_proxy_shape_reads(self):
+        self.run_case('''
+local attempted,allowed=false,false
+local oldSave=setmetatable({}, {__index=function(_,key)
+    if key=="Pets" and not attempted then
+        attempted=true
+        facade.Save.Get=function() return save end
+        allowed=pcall(care.Connect,care)
+    end
+    return nil
+end})
+facade.Save.Get=function() return oldSave end
+care:Connect()
+assert(care:InspectSave())
+assert(attempted and not allowed,"shape inspection released ownership before native getters finished")
+care:Connect()
+assert(care.Supported.AutoGold and care.Supported.AutoRainbow,"fresh valid connection stayed disabled")
+assert(#calls==0)
+''')
+
+    def test_canceled_save_shape_read_cannot_disable_capabilities_or_continue_reads(self):
+        self.run_case('''
+local live=true
+local afterCancel=0
+local value=setmetatable({}, {__index=function(_,key)
+    if not live then afterCancel+=1 end
+    if key=="Pets" then live=false end
+    return nil
+end})
+facade.Save.Get=function() return value end
+care:Connect()
+assert(care:InspectSave(function() return live end)==false)
+assert(care.Supported.AutoGold and care.Supported.AutoRainbow,"canceled inspection disabled the connection")
+assert(afterCancel==0,"canceled shape inspection continued reading proxy fields")
+assert(#calls==0)
+''')
+
+    def test_nil_hatch_save_disables_mutations_and_reports_the_actual_shape(self):
+        self.run_case('''
+facade.Save.Get=function() return nil end
+care:Connect()
+assert(not pcall(care.CanHatch,care,"Starter Egg","Single"))
+assert(not care.Supported.AutoHatch and not care.Supported.AutoGold and not care.Supported.AutoRainbow)
+contains(care.Reason,"Save.Get")
+contains(care.Report,"Save.Get result type=nil")
+assert(#calls==0)
+''')
+
     def test_read_only_save_inspector_reports_shapes_without_mutation(self):
         self.run_case('''
 care:Connect()

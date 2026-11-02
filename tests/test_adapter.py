@@ -421,6 +421,19 @@ assert(not adapter.Supported.AutoFarm, "read-only inspection enabled farming wit
 contains(adapter.Report, "Local coin inspection")
 ''')
 
+    def test_local_coin_inspector_uses_pos_when_coin_is_a_render_model(self):
+        self.run_case('''
+loadedCoin:FindFirstChild("Coin").ClassName="Model"
+part("POS",Vector3.new(10,0,0),loadedCoin)
+local adapter=PetSim99.new()
+local ok,report=adapter:InspectCoinModels()
+assert(ok)
+contains(report,"valid position markers=1")
+contains(report,"coin1 [POS]")
+assert(nativeCalls==0 and #calls==0)
+assert(not adapter.Supported.AutoFarm)
+''')
+
     def test_wrong_place_or_universe_makes_no_native_or_network_calls(self):
         for change in ["game.PlaceId = 1", "game.GameId = 1"]:
             with self.subTest(change=change):
