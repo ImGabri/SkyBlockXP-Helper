@@ -19,11 +19,17 @@ SPEC.loader.exec_module(builder)
 
 
 FIXTURE = r'''
+local nativeTypeof = typeof
+local function typeof(value)
+    if type(value)=="table" and value.ClassName then return "Instance" end
+    return nativeTypeof(value)
+end
 local clock = 100
 local os = { clock = function() return clock end }
 local taskErrors, spawned = {}, {}
 local nativeCancelThrows = false
 local setclipboard
+local isrbxactive = function() return true end
 local task = {}
 function task.spawn(callback)
     local thread = coroutine.create(callback)
@@ -89,6 +95,15 @@ local services = {
     Players = { LocalPlayer = player },
 }
 local game = { PlaceId = 85920622393590, GameId = 3317771874 }
+local cursorPosition = { X=200, Y=250 }
+local guiHits = {}
+local playerGui = { ClassName="PlayerGui" }
+function playerGui:IsA(kind) return kind=="PlayerGui" end
+function playerGui:GetGuiObjectsAtPosition() return guiHits end
+function player:FindFirstChild(name) if name=="PlayerGui" then return playerGui end end
+services.UserInputService = { InputBegan=signal(), GetFocusedTextBox=function() return nil end,
+    GetMouseLocation=function() return cursorPosition end }
+services.GuiService = { MenuIsOpen=false }
 function game:GetService(name)
     assert(services[name], "Unexpected fixture service: " .. name)
     return services[name]
@@ -210,6 +225,21 @@ function navigation:ApproachEgg(target, active)
 end
 local NavigationStub = { new = function() return navigation end }
 
+local function setupHeavenInput()
+    local target={Name="Heaven Island Vault",Parent=workspace,Position={X=15,Y=0,Z=0}}
+    function target:IsA(kind) return kind=="BasePart" end
+    function target:IsDescendantOf(parent) return self.Parent==parent end
+    rootPart.Position={X=0,Y=0,Z=0}
+    workspace.GetDescendants=function() return {target} end
+    workspace.CurrentCamera={ViewportSize={X=1200,Y=800},
+        WorldToViewportPoint=function() return {X=200,Y=250,Z=1},true end}
+    local counts={clicks=0,moves=0,target=target}
+    mousemoveabs=function(x,y) counts.moves+=1;cursorPosition={X=x,Y=y} end
+    mouse1click=function() counts.clicks+=1 end
+    player.GetMouse=function() return {Target=target} end
+    return counts
+end
+
 local function contains(text, expected)
     assert(string.find(text, expected, 1, true), "Missing text '" .. expected .. "' in '" .. text .. "'")
 end
@@ -225,7 +255,7 @@ class RuntimeTests(unittest.TestCase):
             directory = Path(temporary)
             sources = directory / "src"
             sources.mkdir()
-            for name in ["Config.luau", "Policy.luau", "Jobs.luau", "Runtime.luau"]:
+            for name in ["Config.luau", "Policy.luau", "Jobs.luau", "Runtime.luau", "ClickGuard.luau"]:
                 shutil.copyfile(ROOT / "src/client" / name, sources / name)
             (sources / "Interface.luau").write_text("return InterfaceStub\n", encoding="utf-8")
             (sources / "PetSim99.luau").write_text("return AdapterStub\n", encoding="utf-8")
@@ -433,6 +463,56 @@ local status = string.lower(ui.State.Status)
 assert(string.find(status, "idle", 1, true) or string.find(status, "connect", 1, true), "startup status does not describe manual connection")
 assert(runtime:Action("Reconnect"))
 assert(adapter.ConnectCalls == 1 and adapter.NativeCalls == 1 and runtime.Ready)
+runtime:Destroy()
+''')
+
+    def test_rejected_generic_input_enable_leaves_the_feature_disabled(self):
+        self.run_case('''
+for _,key in ipairs({"HeavenIslandSweep","HeavenChestAssist"}) do
+    local accepted=runtime:SetOption(key,true)
+    assert(not accepted and not runtime.Options[key],"rejected input setting enabled automation")
+end
+runtime:Destroy()
+''')
+
+    def test_input_farm_pauses_during_pet_journey_and_drops_old_pending_aim(self):
+        self.run_case('''
+local counts=setupHeavenInput()
+assert(runtime:Action("StartHeavenSweep"))
+runtime:Step()
+assert(runtime.HeavenSweepPending)
+runtime:Action("PrepareCare")
+runtime:SetOption("ConversionSpecies","Cat")
+navigationHook=function() coroutine.yield("travel pending") end
+runtime:Action("GoldOnce")
+clock+=1
+runtime:Step()
+assert(counts.clicks==0 and not runtime.HeavenSweepPending,"care journey raced a cached world click")
+runtime:Destroy()
+''')
+
+    def test_input_farm_does_not_click_through_ui_or_without_focus_or_life(self):
+        blockers = {
+            "ui": '''local screen={ClassName="ScreenGui",Enabled=true,Parent=playerGui}
+function screen:IsA(kind) return kind=="LayerCollector" or kind=="ScreenGui" end
+local button={ClassName="TextButton",Visible=true,Active=true,BackgroundTransparency=0,Parent=screen}
+function button:IsA(kind) return kind=="GuiObject" or kind=="GuiButton" end
+guiHits={button}
+''',
+            "focus": 'isrbxactive=function() return false end\n',
+            "dead": 'humanoid.Health=0\n',
+        }
+        for label, change in blockers.items():
+            with self.subTest(blocker=label):
+                self.run_case('''
+local counts=setupHeavenInput()
+runtime:Action("StartHeavenSweep")
+runtime:Step()
+assert(runtime.HeavenSweepPending)
+''' + change + '''
+clock+=1
+runtime:Step()
+assert(counts.clicks==0 and not runtime.HeavenSweepPending,"blocked input still clicked")
 runtime:Destroy()
 ''')
 
