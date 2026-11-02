@@ -21,7 +21,7 @@ local guiClasses = {Frame=true,ScrollingFrame=true,CanvasGroup=true,TextButton=t
 local function object(class, parent)
     local value = {ClassName=class,Parent=parent,Visible=true,Active=false,
         BackgroundTransparency=1,TextTransparency=1,TextStrokeTransparency=1,
-        ImageTransparency=1,GroupTransparency=0,Enabled=true}
+        ImageTransparency=1,GroupTransparency=0,Enabled=true,Text="Visible label",Image="rbxassetid://1"}
     function value:IsA(kind)
         return self.ClassName==kind or (kind=="GuiObject" and guiClasses[self.ClassName]==true)
             or (kind=="GuiButton" and (self.ClassName=="TextButton" or self.ClassName=="ImageButton"))
@@ -124,6 +124,12 @@ assert(Guard.Check(player,input,service,active)==true,"hidden ancestor blocked a
 local parent=object("Frame",screen)
 hits={object("Frame",parent),object("TextLabel",parent),object("ImageLabel",parent),object("CanvasGroup",parent)}
 assert(Guard.Check(player,input,service,active)==true)
+local emptyText=object("TextLabel",parent)
+emptyText.Text="";emptyText.TextTransparency=0;emptyText.TextStrokeTransparency=0
+local emptyImage=object("ImageLabel",parent)
+emptyImage.Image="";emptyImage.ImageTransparency=0
+hits={emptyText,emptyImage}
+assert(Guard.Check(player,input,service,active)==true,"empty passive image/text wrappers blocked input")
 ''')
 
     def test_opaque_parent_blocks_even_if_hit_list_only_contains_transparent_child(self):
