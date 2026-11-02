@@ -22,16 +22,18 @@ local function visibleChain(hit, playerGui)
     if typeof(hit) ~= "Instance" or not hit:IsA("GuiObject") then
         return nil, "GUI hit query returned an unknown object."
     end
-    local chain, node = {}, hit
+    local chain, node, renderHiddenThrough = {}, hit, 0
     for _ = 1, 64 do
-        if node == playerGui then return chain end
+        if node == playerGui then return chain, nil, renderHiddenThrough end
         if typeof(node) ~= "Instance" then return nil, "GUI ancestry could not be verified." end
         if node:IsA("GuiObject") then
             if type(node.Visible) ~= "boolean" then return nil, "GUI visibility is unreadable." end
             if not node.Visible then return {} end
             if node:IsA("CanvasGroup") then
                 if not alpha(node.GroupTransparency) then return nil, "GUI group visibility is unreadable." end
-                if node.GroupTransparency == 1 then return {} end
+                -- Appearance does not disable input on buttons/active objects.
+                -- Ancestors above this group can still be visibly opaque.
+                if node.GroupTransparency == 1 then renderHiddenThrough = #chain + 1 end
             end
             table.insert(chain, node)
         elseif node:IsA("LayerCollector") then
@@ -43,10 +45,11 @@ local function visibleChain(hit, playerGui)
     return nil, "GUI ancestry exceeded the verification limit."
 end
 
-local function obstructs(node)
+local function obstructs(node, renderHidden)
     if node:IsA("GuiButton") or node:IsA("TextBox") then return true end
     if type(node.Active) ~= "boolean" then return nil, "GUI interactivity is unreadable." end
     if node.Active then return true end
+    if renderHidden then return false end
     if not alpha(node.BackgroundTransparency) then return nil, "GUI opacity is unreadable." end
     if node.BackgroundTransparency < 1 then return true end
     if node:IsA("ImageLabel") then
@@ -95,10 +98,10 @@ local function check(player, input, guiService, isActive)
         end
     end
     for index = 1, size do
-        local chain, reason = visibleChain(hits[index], playerGui)
+        local chain, reason, renderHiddenThrough = visibleChain(hits[index], playerGui)
         if not chain then return false, reason end
-        for _, node in ipairs(chain) do
-            local covered, issue = obstructs(node)
+        for depth, node in ipairs(chain) do
+            local covered, issue = obstructs(node, depth <= (renderHiddenThrough or 0))
             if issue then return false, issue end
             if covered then return false, "Paused: visible or interactive GUI covers the cursor." end
         end
